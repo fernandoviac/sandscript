@@ -1,0 +1,13 @@
+{
+  "exclude": [
+    "editor/grammars"
+  ],
+  "tasks": {
+    "test": "deno run --v8-flags=--expose-gc --allow-all tools/test-runner.js",
+    "verify:persisted-format-cutover": "deno test --allow-all tests/fuel/drone_migration_test.js",
+    "wasm": "deno task wasm:engines && deno task wasm:build && deno task install:local",
+    "wasm:engines": "deno run --allow-read --allow-write --allow-run tools/build-engines.js",
+    "wasm:build": "deno run --allow-read --allow-write --allow-run tools/build-fuel-wasm.js",
+    "install:local": "deno install --global --allow-all --force -n sand --root $HOME/.local src/sand/cli.js"
+  }
+}

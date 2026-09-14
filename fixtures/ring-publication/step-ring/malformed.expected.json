@@ -1,0 +1,11 @@
+{
+  "status": "malformed",
+  "segmentGeneration": 0,
+  "capacity": 8,
+  "reservationHead": 4,
+  "newestCommitted": 0,
+  "oldestAvailable": 0,
+  "gap": null,
+  "entries": [],
+  "truncation": null
+}

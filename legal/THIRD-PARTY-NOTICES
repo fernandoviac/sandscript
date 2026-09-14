@@ -1,0 +1,119 @@
+Third-party source, fixture, and development-reference notices:
+
+================================================================================
+V8 JavaScript Engine
+================================================================================
+
+Portions of the transcendental math function implementations in
+src/fuel/interpreter.wat are adapted from V8.
+
+Copyright 2014 the V8 project authors. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of Google Inc. nor the names of its contributors
+      may be used to endorse or promote products derived from this software
+      without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+Source: https://chromium.googlesource.com/v8/v8/
+
+================================================================================
+JSON Schema Test Suite
+================================================================================
+
+fixtures/json-schema-test-suite/ vendors the official JSON Schema
+conformance corpus from
+https://github.com/json-schema-org/JSON-Schema-Test-Suite at commit
+c9510e3bf8a896c3cba4e08509cf752b4f30dff8 (directories tests/draft2020-12,
+tests/draft2019-09, tests/draft7, tests/draft4, and remotes/). It is the
+oracle for tests/fuel/schema_conformance_test.js and is not part of any
+shipped artifact.
+
+Copyright (c) 2012 Julian Berman
+
+Licensed under the MIT License. The full text is retained alongside the
+fixtures at fixtures/json-schema-test-suite/LICENSE, and the vendoring
+rationale at fixtures/json-schema-test-suite/PROVENANCE.md.
+
+================================================================================
+JSON Schema metaschemas
+================================================================================
+
+fixtures/json-schema-test-suite/metaschemas/ vendors the official JSON
+Schema metaschemas (drafts 2020-12, 2019-09, 07, and 04) from
+https://json-schema.org/, published by the JSON Schema organization under
+the BSD/AFL dual license (see
+https://github.com/json-schema-org/json-schema-spec/blob/main/LICENSE).
+Conformance fixtures only; not part of any shipped artifact.
+
+================================================================================
+Lean 4 and lean4export
+================================================================================
+
+Lean 4 v4.34.0-rc2
+Source: https://github.com/leanprover/lean4
+Revision: 6a10ac8c22beadecabdbb0919c2b50214762f91d
+Repository source license: Apache License, Version 2.0
+Verbatim upstream LICENSE: legal/lean4-LICENSE
+Verbatim upstream binary dependency license collection: legal/lean4-LICENSES
+
+lean4export
+Source: https://github.com/leanprover/lean4export
+Revision: 411dce7db58a3afc60ecab2d211acd1042b593dc
+Repository source license: Apache License, Version 2.0
+Verbatim upstream LICENSE: legal/lean4export-LICENSE
+
+These revisions are the reference sources and offline oracle for SandScript's
+Lean-alignment work. This notice does not claim that a Lean executable, its
+bundled libraries, or an exported Init corpus is included in every SandScript
+distribution. The preparation exports were temporary and are not vendored.
+
+The audited Lean kernel type_checker.cpp carries this notice:
+Copyright (c) 2013-14 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+
+The audited Lean src/Init/Prelude.lean carries this notice:
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+
+These are not an exhaustive attribution inventory for the full Init library.
+When source, translated WAT, exported declarations or derived proof artifacts
+are incorporated, retain all applicable source-file copyright/attribution
+notices and identify the exact originating files, revision and modifications.
+Do not replace third-party copyright ownership with SandScript's copyright.
+
+As a distribution policy, Lean-derived declaration/proof data retains its
+Lean source provenance and applicable license/notices after conversion to
+NDJSON, compressed fixtures, SandScript artifacts or embedded WASM data.
+The exporter's license is not a substitute for the exported source's license.
+An external download URL is not a substitute for distributing required texts.
+
+The pinned repository roots contain no standalone NOTICE file. Lean's LICENSES
+is preserved separately and must not be mistaken for an Apache-only grant:
+it includes additional terms for bundled binary components. Redistributing a
+Lean toolchain or those libraries requires a separate component/platform
+inventory and satisfaction of applicable source/relinking and other obligations;
+copying this license collection alone is not a complete binary compliance review.
+
+No affiliation with or endorsement by Lean's authors or contributors is implied.
+Release requirements are recorded in docs/legal/README.md.

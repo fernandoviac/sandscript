@@ -1,0 +1,57 @@
+{
+  "status": "ok",
+  "segmentGeneration": 1,
+  "capacity": 8,
+  "reservationHead": 3,
+  "newestCommitted": 3,
+  "oldestAvailable": 1,
+  "gap": null,
+  "entries": [
+    {
+      "tick": "0",
+      "kind": 1,
+      "slot": 1,
+      "fuel": "1",
+      "wallNanos": "3",
+      "bytesIn": "8",
+      "bytesOut": "13",
+      "calls": "6",
+      "cpuNanos": "16",
+      "bytesHeld": "0",
+      "ext0": "0",
+      "ext1": "0",
+      "index": 1
+    },
+    {
+      "tick": "0",
+      "kind": 1,
+      "slot": 2,
+      "fuel": "2",
+      "wallNanos": "6",
+      "bytesIn": "15",
+      "bytesOut": "24",
+      "calls": "7",
+      "cpuNanos": "29",
+      "bytesHeld": "0",
+      "ext0": "0",
+      "ext1": "0",
+      "index": 2
+    },
+    {
+      "tick": "0",
+      "kind": 1,
+      "slot": 3,
+      "fuel": "3",
+      "wallNanos": "9",
+      "bytesIn": "22",
+      "bytesOut": "35",
+      "calls": "8",
+      "cpuNanos": "42",
+      "bytesHeld": "0",
+      "ext0": "0",
+      "ext1": "0",
+      "index": 3
+    }
+  ],
+  "truncation": null
+}

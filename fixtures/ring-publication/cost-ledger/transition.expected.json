@@ -1,0 +1,27 @@
+{
+  "status": "ok",
+  "segmentGeneration": 2,
+  "capacity": 8,
+  "reservationHead": 1,
+  "newestCommitted": 1,
+  "oldestAvailable": 1,
+  "gap": null,
+  "entries": [
+    {
+      "tick": "0",
+      "kind": 1,
+      "slot": 1,
+      "fuel": "1",
+      "wallNanos": "3",
+      "bytesIn": "8",
+      "bytesOut": "13",
+      "calls": "6",
+      "cpuNanos": "16",
+      "bytesHeld": "0",
+      "ext0": "0",
+      "ext1": "0",
+      "index": 1
+    }
+  ],
+  "truncation": null
+}

@@ -1,0 +1,521 @@
+{
+  "contractVersion": 2,
+  "generator": "tools/generate-ring-fixtures.js",
+  "rings": {
+    "cost-ledger": {
+      "entrySize": 96,
+      "states": {
+        "empty": {
+          "region": "cost-ledger/empty.bin",
+          "expected": "cost-ledger/empty.expected.json",
+          "capacity": 8,
+          "writeIndex": 0,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "partial": {
+          "region": "cost-ledger/partial.bin",
+          "expected": "cost-ledger/partial.expected.json",
+          "capacity": 8,
+          "writeIndex": 3,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "wrapped": {
+          "region": "cost-ledger/wrapped.bin",
+          "expected": "cost-ledger/wrapped.expected.json",
+          "capacity": 8,
+          "writeIndex": 12,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "raced": {
+          "region": "cost-ledger/raced.bin",
+          "expected": "cost-ledger/raced.expected.json",
+          "capacity": 8,
+          "writeIndex": 9,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "reservation for entry 9 without its publication token"
+        },
+        "pre-wrap": {
+          "region": "cost-ledger/pre-wrap.bin",
+          "expected": "cost-ledger/pre-wrap.expected.json",
+          "capacity": 8,
+          "writeIndex": 4294967294,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 4294967286,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "generation one with the head one reservation before wrap"
+        },
+        "transition-seqlock": {
+          "region": "cost-ledger/transition-seqlock.bin",
+          "expected": "cost-ledger/transition-seqlock.expected.json",
+          "capacity": 8,
+          "writeIndex": 4294967295,
+          "segmentGeneration": 0,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "generation-zero seqlock rejects the old high head and slots"
+        },
+        "transition": {
+          "region": "cost-ledger/transition.bin",
+          "expected": "cost-ledger/transition.expected.json",
+          "capacity": 8,
+          "writeIndex": 1,
+          "segmentGeneration": 2,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "successor generation index 1 with prior-generation slots resident"
+        },
+        "old-expected-generation": {
+          "region": "cost-ledger/old-expected-generation.bin",
+          "expected": "cost-ledger/old-expected-generation.expected.json",
+          "capacity": 8,
+          "writeIndex": 1,
+          "segmentGeneration": 2,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536,
+            "expectedSegmentGeneration": 1
+          },
+          "note": "request remains bound to generation one"
+        },
+        "generation-raced": {
+          "region": "cost-ledger/generation-raced.bin",
+          "expected": "cost-ledger/generation-raced.expected.json",
+          "capacity": 8,
+          "writeIndex": 1,
+          "segmentGeneration": 2,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "mutation": {
+            "after": "payload-decode",
+            "field": "segmentGeneration",
+            "from": 2,
+            "to": 3
+          },
+          "note": "consumer mutates generation after payload decode and before validation"
+        },
+        "segment-space-exhausted": {
+          "region": "cost-ledger/segment-space-exhausted.bin",
+          "expected": "cost-ledger/segment-space-exhausted.expected.json",
+          "capacity": 8,
+          "writeIndex": 4294967295,
+          "segmentGeneration": 4294967295,
+          "flags": 1,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "unsupported-version": {
+          "region": null,
+          "expected": "cost-ledger/unsupported-version.expected.json",
+          "note": "membrane format 13 predates the segment-generation header"
+        },
+        "malformed": {
+          "region": "cost-ledger/malformed.bin",
+          "expected": "cost-ledger/malformed.expected.json",
+          "capacity": 8,
+          "writeIndex": 0,
+          "segmentGeneration": 0,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "required segment generation is zero"
+        }
+      }
+    },
+    "header-event-ring": {
+      "entrySize": 32,
+      "states": {
+        "empty": {
+          "region": "header-event-ring/empty.bin",
+          "expected": "header-event-ring/empty.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "partial": {
+          "region": "header-event-ring/partial.bin",
+          "expected": "header-event-ring/partial.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "wrapped": {
+          "region": "header-event-ring/wrapped.bin",
+          "expected": "header-event-ring/wrapped.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "raced": {
+          "region": "header-event-ring/raced.bin",
+          "expected": "header-event-ring/raced.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "reservation for entry 5 without its publication token"
+        },
+        "pre-wrap": {
+          "region": "header-event-ring/pre-wrap.bin",
+          "expected": "header-event-ring/pre-wrap.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 4294967290,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "generation one with the head one reservation before wrap"
+        },
+        "transition-seqlock": {
+          "region": "header-event-ring/transition-seqlock.bin",
+          "expected": "header-event-ring/transition-seqlock.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 0,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "generation-zero seqlock rejects the old high head and slots"
+        },
+        "transition": {
+          "region": "header-event-ring/transition.bin",
+          "expected": "header-event-ring/transition.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 2,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "successor generation index 1 with prior-generation slots resident"
+        },
+        "old-expected-generation": {
+          "region": "header-event-ring/old-expected-generation.bin",
+          "expected": "header-event-ring/old-expected-generation.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 2,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536,
+            "expectedSegmentGeneration": 1
+          },
+          "note": "request remains bound to generation one"
+        },
+        "generation-raced": {
+          "region": "header-event-ring/generation-raced.bin",
+          "expected": "header-event-ring/generation-raced.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 2,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "mutation": {
+            "after": "payload-decode",
+            "field": "segmentGeneration",
+            "from": 2,
+            "to": 3
+          },
+          "note": "consumer mutates generation after payload decode and before validation"
+        },
+        "segment-space-exhausted": {
+          "region": "header-event-ring/segment-space-exhausted.bin",
+          "expected": "header-event-ring/segment-space-exhausted.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 4294967295,
+          "flags": 1,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "unsupported-version": {
+          "region": "header-event-ring/unsupported-version.bin",
+          "expected": "header-event-ring/unsupported-version.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "ring header declares pre-segment format version 2"
+        },
+        "not-enabled": {
+          "region": null,
+          "expected": "header-event-ring/not-enabled.expected.json",
+          "ringSize": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "malformed": {
+          "region": "header-event-ring/malformed.bin",
+          "expected": "header-event-ring/malformed.expected.json",
+          "ringSize": 144,
+          "segmentGeneration": 0,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "required segment generation is zero"
+        }
+      }
+    },
+    "step-ring": {
+      "entrySize": 40,
+      "states": {
+        "empty": {
+          "region": "step-ring/empty.bin",
+          "expected": "step-ring/empty.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "partial": {
+          "region": "step-ring/partial.bin",
+          "expected": "step-ring/partial.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "wrapped": {
+          "region": "step-ring/wrapped.bin",
+          "expected": "step-ring/wrapped.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "raced": {
+          "region": "step-ring/raced.bin",
+          "expected": "step-ring/raced.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "reservation for the next entry without its publication token"
+        },
+        "pre-wrap": {
+          "region": "step-ring/pre-wrap.bin",
+          "expected": "step-ring/pre-wrap.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 4294967286,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "generation one with the head one reservation before wrap"
+        },
+        "transition-seqlock": {
+          "region": "step-ring/transition-seqlock.bin",
+          "expected": "step-ring/transition-seqlock.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 0,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "generation-zero seqlock rejects the old high head and slots"
+        },
+        "transition": {
+          "region": "step-ring/transition.bin",
+          "expected": "step-ring/transition.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 2,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "successor generation index 1 with prior-generation slots resident"
+        },
+        "old-expected-generation": {
+          "region": "step-ring/old-expected-generation.bin",
+          "expected": "step-ring/old-expected-generation.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 2,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536,
+            "expectedSegmentGeneration": 1
+          },
+          "note": "request remains bound to generation one"
+        },
+        "generation-raced": {
+          "region": "step-ring/generation-raced.bin",
+          "expected": "step-ring/generation-raced.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 2,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "mutation": {
+            "after": "payload-decode",
+            "field": "segmentGeneration",
+            "from": 2,
+            "to": 3
+          },
+          "note": "consumer mutates generation after payload decode and before validation"
+        },
+        "segment-space-exhausted": {
+          "region": "step-ring/segment-space-exhausted.bin",
+          "expected": "step-ring/segment-space-exhausted.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 4294967295,
+          "flags": 1,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "unsupported-version": {
+          "region": "step-ring/unsupported-version.bin",
+          "expected": "step-ring/unsupported-version.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 1,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "ring header declares pre-segment format version 2"
+        },
+        "not-enabled": {
+          "region": null,
+          "expected": "step-ring/not-enabled.expected.json",
+          "ringSize": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          }
+        },
+        "malformed": {
+          "region": "step-ring/malformed.bin",
+          "expected": "step-ring/malformed.expected.json",
+          "ringSize": 336,
+          "segmentGeneration": 0,
+          "flags": 0,
+          "request": {
+            "afterIndex": 0,
+            "maximumEntries": 64,
+            "maximumBytes": 65536
+          },
+          "note": "required segment generation is zero"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "status": "segment-changed",
+  "segmentGeneration": 2,
+  "capacity": 8,
+  "reservationHead": 1,
+  "newestCommitted": 0,
+  "oldestAvailable": 0,
+  "gap": null,
+  "entries": [],
+  "truncation": null
+}

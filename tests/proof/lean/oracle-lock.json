@@ -1,0 +1,48 @@
+{
+  "lean": {
+    "repository": "https://github.com/leanprover/lean4",
+    "toolchain": "leanprover/lean4:v4.34.0-rc2",
+    "revision": "6a10ac8c22beadecabdbb0919c2b50214762f91d",
+    "sourceLicense": "Apache-2.0",
+    "licenseFiles": [
+      {
+        "upstreamPath": "LICENSE",
+        "path": "legal/lean4-LICENSE",
+        "sha256": "8b28515ffffc5c0fe2807d8ae3735b00b324d9b7ce807dd63ff6ac8922fbce7e"
+      },
+      {
+        "upstreamPath": "LICENSES",
+        "path": "legal/lean4-LICENSES",
+        "sha256": "00cce2ac071f63d470a287438a7c6bbc4334706be244384e9af4fc9ead11cdce"
+      }
+    ]
+  },
+  "exporter": {
+    "repository": "https://github.com/leanprover/lean4export",
+    "revision": "411dce7db58a3afc60ecab2d211acd1042b593dc",
+    "sourceLicense": "Apache-2.0",
+    "licenseFiles": [
+      {
+        "upstreamPath": "LICENSE",
+        "path": "legal/lean4export-LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      }
+    ]
+  },
+  "formatVersion": "3.1.0",
+  "export": {
+    "modules": ["Init"],
+    "exportUnsafe": false,
+    "exportMdata": false
+  },
+  "releaseArchives": {
+    "darwin_aarch64": {
+      "url": "https://github.com/leanprover/lean4/releases/download/v4.34.0-rc2/lean-4.34.0-rc2-darwin_aarch64.tar.zst",
+      "sha256": "ca79a92a15c56d0270d9cdba936a07933efd14a7de635b55b09801979ce73909"
+    },
+    "linux": {
+      "url": "https://github.com/leanprover/lean4/releases/download/v4.34.0-rc2/lean-4.34.0-rc2-linux.tar.zst",
+      "sha256": "3d011041203acacf300d343a39673f7d233743397993797c941346ae9e5df1a8"
+    }
+  }
+}

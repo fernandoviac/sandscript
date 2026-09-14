@@ -1,0 +1,11 @@
+{
+  "status": "segment-space-exhausted",
+  "segmentGeneration": 4294967295,
+  "capacity": 8,
+  "reservationHead": 4294967295,
+  "newestCommitted": 0,
+  "oldestAvailable": 0,
+  "gap": null,
+  "entries": [],
+  "truncation": null
+}

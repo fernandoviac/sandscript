@@ -1,0 +1,21 @@
+{
+  "contractVersion": 1,
+  "sourceCommit": "156b91b83fe857587da9cb534524e45ea174b5f2",
+  "sourceFormatVersion": 2,
+  "targetFormatVersion": 3,
+  "cases": [
+    {
+      "name": "empty",
+      "options": {}
+    },
+    {
+      "name": "executed-inline-source",
+      "options": {
+        "inlineSource": true,
+        "astRegionSize": 16384,
+        "stepRingSize": 4096,
+        "headerEventRingSize": 4096
+      }
+    }
+  ]
+}

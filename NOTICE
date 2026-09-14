@@ -1,0 +1,11 @@
+SandScript
+Copyright 2026 DevBlanket AB
+
+SandScript is licensed under the Apache License, Version 2.0. See LICENSE.
+
+Third-party notices for V8, JSON Schema fixtures, and the pinned Lean and
+lean4export references are preserved in legal/THIRD-PARTY-NOTICES.
+Upstream Lean and lean4export license texts are retained under legal/.
+
+The SandScript name and any DevBlanket AB marks are not licensed by the Apache
+License. See the trademark statement in README.md.

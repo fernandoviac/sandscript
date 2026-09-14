@@ -1,0 +1,12 @@
+{
+  "status": "unsupported-version",
+  "declaredVersion": 2,
+  "segmentGeneration": 0,
+  "capacity": 4,
+  "reservationHead": 0,
+  "newestCommitted": 0,
+  "oldestAvailable": 0,
+  "gap": null,
+  "entries": [],
+  "truncation": null
+}

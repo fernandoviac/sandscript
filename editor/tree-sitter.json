@@ -1,0 +1,24 @@
+{
+  "metadata": {
+    "version": "0.1.0",
+    "license": "UNLICENSED",
+    "description": "Tree-sitter grammar for SandScript",
+    "authors": [
+      { "name": "Fernando Via Canel" }
+    ],
+    "links": {
+      "repository": ""
+    }
+  },
+  "grammars": [
+    {
+      "name": "sandscript",
+      "camelCase": false,
+      "scope": "source.sandscript",
+      "path": ".",
+      "file-types": ["ss", "drone"],
+      "highlights": "languages/sandscript/highlights.scm",
+      "indents": "languages/sandscript/indents.scm"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "status": "ok",
+  "segmentGeneration": 2,
+  "capacity": 8,
+  "reservationHead": 1,
+  "newestCommitted": 1,
+  "oldestAvailable": 1,
+  "gap": null,
+  "entries": [
+    {
+      "slot": 0,
+      "instructionIndex": 28,
+      "opcode": 80,
+      "opcodeName": "JUMP",
+      "status": 1,
+      "errorCode": 0,
+      "completionType": 0,
+      "pendingDepth": 0,
+      "callDepth": 0,
+      "scopePointer": 74520,
+      "tryDepth": 0,
+      "grantDepth": 0,
+      "heapPointer": 88180,
+      "stringPointer": 8471424,
+      "index": 1
+    }
+  ],
+  "truncation": null
+}

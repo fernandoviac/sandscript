@@ -1,0 +1,20 @@
+{
+  "type": "module",
+  "name": "tree-sitter-sandscript",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for SandScript",
+  "main": "grammar.js",
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test",
+    "parse": "tree-sitter parse"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.sandscript",
+      "file-types": ["ss", "drone"],
+      "highlights": "languages/sandscript/highlights.scm",
+      "indents": "languages/sandscript/indents.scm"
+    }
+  ]
+}

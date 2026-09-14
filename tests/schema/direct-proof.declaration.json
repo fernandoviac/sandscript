@@ -1,0 +1,639 @@
+{
+  "memory": {
+    "module": "env",
+    "name": "memory",
+    "shared": true,
+    "minimum": 1,
+    "maximum": 16384
+  },
+  "exports": {
+    "case_count": "()->i32",
+    "run_case": "(caseId:i32)->i32",
+    "result_pointer": "()->i32",
+    "result_size": "()->i32"
+  },
+  "result": {
+    "bytes": 32,
+    "endian": "little",
+    "fields": {
+      "caseId": "u32@0",
+      "observedStatus": "u32@4",
+      "failureCode": "u32@8",
+      "expectedStatus": "u32@12",
+      "phase": "u32@16",
+      "reserved": "u32@20",
+      "consumedWork": "u64@24"
+    }
+  },
+  "cases": [
+    "single compile, portable copy/load, test and validate",
+    "ordered set match and matchAll, route-index verdicts",
+    "external resource bundle and regex",
+    "tiny/large grants preserve program bytes and work",
+    "finite compilation exhaustion",
+    "finite reference-chain evaluation exhaustion",
+    "finite large-document exhaustion",
+    "exact compilation completion",
+    "over-budget compilation terminal precedence",
+    "exact atomic set completion",
+    "over-budget atomic set terminal precedence",
+    "zero and sticky operation budget",
+    "checked-u64 overflow and sticky saturation",
+    "short scratch, measured-prefix relocation and input rebinding",
+    "validation program/document relocation and retained check charge",
+    "arena growth retains failed debt and exact retry completion",
+    "unfinished arena equality forbids another attempt",
+    "complete diagnostics, output growth and retained evaluation",
+    "render shortage exhaustion remains sticky",
+    "caller allocation refusal preserves owner spans",
+    "corrupt document and wrapping MessagePack extent",
+    "corrupt portable program geometry and nested offsets",
+    "invalid and overlapping owner spans",
+    "dependent lifetime cleanup and independent program ownership",
+    "stored-error limits preserve honest totals and reject invalid capacity",
+    "engine compile failure rendering and aggregate output retry",
+    "shared exact numeric text and checked allocation-free regions",
+    "full numeric string grammar and exact rounding boundaries",
+    "exact hexadecimal numeric display without fractional truncation"
+  ],
+  "modules": {
+    "regex": {
+      "path": "src/fuel/regex-engine.wasm",
+      "bytes": 24391,
+      "sha256": "e19701da0fb948c432219f5a7e88d1ac7e4d927d62f3237e7a0b73f5a386ea90",
+      "imports": [
+        {
+          "module": "env",
+          "name": "memory",
+          "kind": "memory"
+        }
+      ],
+      "exports": [
+        {
+          "name": "program_size",
+          "kind": "function"
+        },
+        {
+          "name": "quantified_instruction_count",
+          "kind": "function"
+        },
+        {
+          "name": "measurement_apply_quantifier",
+          "kind": "function"
+        },
+        {
+          "name": "measurement_workspace_size",
+          "kind": "function"
+        },
+        {
+          "name": "continuation_size",
+          "kind": "function"
+        },
+        {
+          "name": "validate_utf8",
+          "kind": "function"
+        },
+        {
+          "name": "compile_flags",
+          "kind": "function"
+        },
+        {
+          "name": "compile_builtin_class",
+          "kind": "function"
+        },
+        {
+          "name": "scan_workspace_size",
+          "kind": "function"
+        },
+        {
+          "name": "measured_program_size",
+          "kind": "function"
+        },
+        {
+          "name": "emission_workspace_size",
+          "kind": "function"
+        },
+        {
+          "name": "validate_program",
+          "kind": "function"
+        },
+        {
+          "name": "max_pattern_bytes",
+          "kind": "function"
+        },
+        {
+          "name": "max_bytecode_instructions",
+          "kind": "function"
+        },
+        {
+          "name": "max_capture_groups",
+          "kind": "function"
+        },
+        {
+          "name": "max_character_class_ranges",
+          "kind": "function"
+        },
+        {
+          "name": "format_version",
+          "kind": "function"
+        },
+        {
+          "name": "measurement_work_charged",
+          "kind": "function"
+        },
+        {
+          "name": "measurement_work_overflow",
+          "kind": "function"
+        },
+        {
+          "name": "scan_work_charged",
+          "kind": "function"
+        },
+        {
+          "name": "scan_work_overflow",
+          "kind": "function"
+        },
+        {
+          "name": "emission_work_charged",
+          "kind": "function"
+        },
+        {
+          "name": "emission_work_overflow",
+          "kind": "function"
+        },
+        {
+          "name": "match_work_charged",
+          "kind": "function"
+        },
+        {
+          "name": "match_work_overflow",
+          "kind": "function"
+        },
+        {
+          "name": "validate_program_work",
+          "kind": "function"
+        },
+        {
+          "name": "initialize_measurement_workspace",
+          "kind": "function"
+        },
+        {
+          "name": "measurement_push_group",
+          "kind": "function"
+        },
+        {
+          "name": "measurement_pop_group",
+          "kind": "function"
+        },
+        {
+          "name": "measurement_add_atom",
+          "kind": "function"
+        },
+        {
+          "name": "measurement_apply_last_quantifier",
+          "kind": "function"
+        },
+        {
+          "name": "scan_pattern",
+          "kind": "function"
+        },
+        {
+          "name": "initialize_program_emission",
+          "kind": "function"
+        },
+        {
+          "name": "initialize_emission_workspace",
+          "kind": "function"
+        },
+        {
+          "name": "emit_pattern",
+          "kind": "function"
+        },
+        {
+          "name": "initialize_match",
+          "kind": "function"
+        },
+        {
+          "name": "run_match",
+          "kind": "function"
+        }
+      ]
+    },
+    "schema": {
+      "path": "src/fuel/schema-engine.wasm",
+      "bytes": 77016,
+      "sha256": "69c857a0c7e158c9f5a212463bb29698c6ab15a0f97a7cde53ddb83d8df8721f",
+      "imports": [
+        {
+          "module": "env",
+          "name": "memory",
+          "kind": "memory"
+        },
+        {
+          "module": "regex",
+          "name": "scan_workspace_size",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "scan_pattern",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "measured_program_size",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "emission_workspace_size",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "initialize_program_emission",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "initialize_emission_workspace",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "emit_pattern",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "validate_program_work",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "scan_work_charged",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "scan_work_overflow",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "emission_work_charged",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "emission_work_overflow",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "match_work_charged",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "match_work_overflow",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "continuation_size",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "initialize_match",
+          "kind": "function"
+        },
+        {
+          "module": "regex",
+          "name": "run_match",
+          "kind": "function"
+        }
+      ],
+      "exports": [
+        {
+          "name": "format_version",
+          "kind": "function"
+        },
+        {
+          "name": "fnv1a",
+          "kind": "function"
+        },
+        {
+          "name": "utf8_count",
+          "kind": "function"
+        },
+        {
+          "name": "node_pointer_string",
+          "kind": "function"
+        },
+        {
+          "name": "program_total_bytes",
+          "kind": "function"
+        },
+        {
+          "name": "program_node_count",
+          "kind": "function"
+        },
+        {
+          "name": "program_root_node",
+          "kind": "function"
+        },
+        {
+          "name": "validate_program",
+          "kind": "function"
+        },
+        {
+          "name": "continuation_size",
+          "kind": "function"
+        },
+        {
+          "name": "rebind_validation",
+          "kind": "function"
+        },
+        {
+          "name": "error_count",
+          "kind": "function"
+        },
+        {
+          "name": "error_stored",
+          "kind": "function"
+        },
+        {
+          "name": "error_record",
+          "kind": "function"
+        },
+        {
+          "name": "error_path_base",
+          "kind": "function"
+        },
+        {
+          "name": "validation_result",
+          "kind": "function"
+        },
+        {
+          "name": "validation_fuel_charged",
+          "kind": "function"
+        },
+        {
+          "name": "compile_workspace_size",
+          "kind": "function"
+        },
+        {
+          "name": "format_code",
+          "kind": "function"
+        },
+        {
+          "name": "keyword_code",
+          "kind": "function"
+        },
+        {
+          "name": "keyword_name",
+          "kind": "function"
+        },
+        {
+          "name": "measured_program_size",
+          "kind": "function"
+        },
+        {
+          "name": "measured_node_count",
+          "kind": "function"
+        },
+        {
+          "name": "measured_max_depth",
+          "kind": "function"
+        },
+        {
+          "name": "compile_diagnostic",
+          "kind": "function"
+        },
+        {
+          "name": "compile_fuel_charged",
+          "kind": "function"
+        },
+        {
+          "name": "emission_workspace_size",
+          "kind": "function"
+        },
+        {
+          "name": "render_error",
+          "kind": "function"
+        },
+        {
+          "name": "format_number",
+          "kind": "function"
+        },
+        {
+          "name": "parse_number_utf16",
+          "kind": "function"
+        },
+        {
+          "name": "format_number_hex",
+          "kind": "function"
+        },
+        {
+          "name": "render_error_complete",
+          "kind": "function"
+        },
+        {
+          "name": "route_count",
+          "kind": "function"
+        },
+        {
+          "name": "route_result",
+          "kind": "function"
+        },
+        {
+          "name": "program_route_count",
+          "kind": "function"
+        },
+        {
+          "name": "transcode_json",
+          "kind": "function"
+        },
+        {
+          "name": "compile_work_charged",
+          "kind": "function"
+        },
+        {
+          "name": "compile_work_overflow",
+          "kind": "function"
+        },
+        {
+          "name": "validation_work_charged",
+          "kind": "function"
+        },
+        {
+          "name": "validation_work_overflow",
+          "kind": "function"
+        },
+        {
+          "name": "measure_schema",
+          "kind": "function"
+        },
+        {
+          "name": "emit_program",
+          "kind": "function"
+        },
+        {
+          "name": "initialize_emission",
+          "kind": "function"
+        },
+        {
+          "name": "initialize_validation",
+          "kind": "function"
+        },
+        {
+          "name": "run_validation",
+          "kind": "function"
+        },
+        {
+          "name": "initialize_work_budget",
+          "kind": "function"
+        },
+        {
+          "name": "compile_direct",
+          "kind": "function"
+        },
+        {
+          "name": "validate_direct",
+          "kind": "function"
+        },
+        {
+          "name": "render_error_direct",
+          "kind": "function"
+        },
+        {
+          "name": "render_failure_direct",
+          "kind": "function"
+        }
+      ]
+    },
+    "caller": {
+      "path": "tests/schema/direct-proof.wasm",
+      "bytes": 721018,
+      "sha256": "e96281e7acb8e926b4462cd9f2578c599b38267a1219c67e1b03a7530d307e22",
+      "imports": [
+        {
+          "module": "env",
+          "name": "memory",
+          "kind": "memory"
+        },
+        {
+          "module": "schema",
+          "name": "initialize_work_budget",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "compile_direct",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "validate_direct",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "render_error_direct",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "validate_program",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "program_total_bytes",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "program_route_count",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "validation_result",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "validation_work_charged",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "error_stored",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "error_record",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "route_count",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "route_result",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "error_count",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "render_failure_direct",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "format_number",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "parse_number_utf16",
+          "kind": "function"
+        },
+        {
+          "module": "schema",
+          "name": "format_number_hex",
+          "kind": "function"
+        }
+      ],
+      "exports": [
+        {
+          "name": "case_count",
+          "kind": "function"
+        },
+        {
+          "name": "result_pointer",
+          "kind": "function"
+        },
+        {
+          "name": "result_size",
+          "kind": "function"
+        },
+        {
+          "name": "run_case",
+          "kind": "function"
+        }
+      ]
+    }
+  },
+  "ownership": "Passive build-time fixtures; WAT-owned disjoint 8-aligned bump spans and memory.grow; copy only LIVE_BYTES at resource returns; no host engine orchestration; poison/release after all dependent diagnostics."
+}

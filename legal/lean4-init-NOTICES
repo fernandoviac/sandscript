@@ -1,0 +1,5250 @@
+Lean Init source attribution inventory
+======================================
+
+Source: https://github.com/leanprover/lean4
+Revision: 6a10ac8c22beadecabdbb0919c2b50214762f91d (v4.34.0-rc2)
+License: Apache-2.0; see lean4-LICENSE and lean4-LICENSES.
+
+This inventory preserves the leading attribution/license comments from every
+Init Lean source file at the pinned revision. It covers the source corpus from
+which the canonical primitive template dependency closure was exported, not
+only the smaller subset referenced by the resulting templates. File paths below
+are relative to the pinned Lean repository. Comments are reproduced verbatim.
+
+The exported expression data is adapted for SandScript by DevBlanket AB, 2026:
+selected declaration dependency closures are encoded as immutable WAT template
+data for structural authentication, without running native Lean code.
+
+src/Init.lean
+-------------
+/-
+Copyright (c) 2014 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/BinderNameHint.lean
+----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner
+-/
+
+src/Init/BinderPredicates.lean
+------------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Gabriel Ebner
+-/
+
+src/Init/ByCases.lean
+---------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/CbvSimproc.lean
+------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Wojciech Różowski
+-/
+
+src/Init/Classical.lean
+-----------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Coe.lean
+-----------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Control.lean
+---------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Control/Basic.lean
+---------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Sebastian Ullrich
+-/
+
+src/Init/Control/Do.lean
+------------------------
+/-
+Copyright (c) 2025 Lean FRO LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Graf
+-/
+
+src/Init/Control/EState.lean
+----------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Control/Except.lean
+----------------------------
+/-
+Copyright (c) 2017 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jared Roesch, Sebastian Ullrich
+
+The Except monad transformer.
+-/
+
+src/Init/Control/ExceptCps.lean
+-------------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Control/Id.lean
+------------------------
+/-
+Copyright (c) 2017 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Ullrich
+
+The identity Monad.
+-/
+
+src/Init/Control/Lawful.lean
+----------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Ullrich, Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Control/Lawful/Basic.lean
+----------------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Ullrich, Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Control/Lawful/Instances.lean
+--------------------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Ullrich, Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Control/Lawful/Lemmas.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Control/Lawful/MonadAttach.lean
+----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Control/Lawful/MonadAttach/Instances.lean
+--------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Control/Lawful/MonadAttach/Lemmas.lean
+-----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Control/Lawful/MonadLift.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Control/Lawful/MonadLift/Basic.lean
+--------------------------------------------
+/-
+Copyright (c) 2025 Quang Dao. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Quang Dao
+-/
+
+src/Init/Control/Lawful/MonadLift/Instances.lean
+------------------------------------------------
+/-
+Copyright (c) 2025 Quang Dao. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Quang Dao, Paul Reichert
+-/
+
+src/Init/Control/Lawful/MonadLift/Lemmas.lean
+---------------------------------------------
+/-
+Copyright (c) 2025 Quang Dao. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Quang Dao
+-/
+
+src/Init/Control/MonadAttach.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Control/Option.lean
+----------------------------
+/-
+Copyright (c) 2017 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Sebastian Ullrich
+-/
+
+src/Init/Control/Reader.lean
+----------------------------
+/-
+Copyright (c) 2017 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Ullrich
+
+The Reader monad transformer for passing immutable State.
+-/
+
+src/Init/Control/State.lean
+---------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Sebastian Ullrich
+
+The State monad transformer.
+-/
+
+src/Init/Control/StateCps.lean
+------------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Control/StateRef.lean
+------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Sebastian Ullrich
+
+The State monad transformer using IO references.
+-/
+
+src/Init/Conv.lean
+------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+
+Notation for operators defined at Prelude.lean
+-/
+
+src/Init/Core.lean
+------------------
+/-
+Copyright (c) 2014 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+
+notation, basic datatypes and type classes
+-/
+
+src/Init/Data.lean
+------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/AC.lean
+---------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Dany Fabian
+-/
+
+src/Init/Data/Array.lean
+------------------------
+/-
+Copyright (c) 2017 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Gabriel Ebner
+-/
+
+src/Init/Data/Array/Attach.lean
+-------------------------------
+/-
+Copyright (c) 2021 Floris van Doorn. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner, Mario Carneiro
+-/
+
+src/Init/Data/Array/Basic.lean
+------------------------------
+/-
+Copyright (c) 2018 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Array/BasicAux.lean
+---------------------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Array/BinSearch.lean
+----------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Array/Bootstrap.lean
+----------------------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro
+-/
+
+src/Init/Data/Array/Count.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/DecidableEq.lean
+------------------------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Array/Erase.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/Extract.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/FinRange.lean
+---------------------------------
+/-
+Copyright (c) 2024 François G. Dorais. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: François G. Dorais
+-/
+
+src/Init/Data/Array/Find.lean
+-----------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/GetLit.lean
+-------------------------------
+/-
+Copyright (c) 2018 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Array/InsertIdx.lean
+----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/InsertionSort.lean
+--------------------------------------
+/-
+Copyright (c) 2018 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Array/Int.lean
+----------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Sebastian Graf, Paul Reichert
+-/
+
+src/Init/Data/Array/Lemmas.lean
+-------------------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Kim Morrison
+-/
+
+src/Init/Data/Array/Lex.lean
+----------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Kim Morrison
+-/
+
+src/Init/Data/Array/Lex/Basic.lean
+----------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Kim Morrison
+-/
+
+src/Init/Data/Array/Lex/Lemmas.lean
+-----------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Kim Morrison
+-/
+
+src/Init/Data/Array/MapIdx.lean
+-------------------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Kim Morrison
+-/
+
+src/Init/Data/Array/Mem.lean
+----------------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Joachim Breitner
+-/
+
+src/Init/Data/Array/MinMax.lean
+-------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Array/Monadic.lean
+--------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/Nat.lean
+----------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Sebastian Graf, Paul Reichert
+-/
+
+src/Init/Data/Array/OfFn.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/Perm.lean
+-----------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/QSort.lean
+------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/QSort/Basic.lean
+------------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Array/Range.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Array/Set.lean
+----------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/Array/Sort.lean
+-----------------------------
+/-
+Copyright (c) 2026 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Array/Sort/Basic.lean
+-----------------------------------
+/-
+Copyright (c) 2026 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Array/Sort/Lemmas.lean
+------------------------------------
+/-
+Copyright (c) 2026 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Array/Subarray.lean
+---------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Array/Subarray/Split.lean
+---------------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: David Thrane Christiansen
+-/
+
+src/Init/Data/Array/TakeDrop.lean
+---------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/Array/Zip.lean
+----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/BEq.lean
+----------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Markus Himmel
+-/
+
+src/Init/Data/BitVec.lean
+-------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/BitVec/Basic.lean
+-------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Hendrix, Wojciech Nawrocki, Leonardo de Moura, Mario Carneiro, Alex Keizer, Harun Khan, Abdalrhman M Mohamed, Siddharth Bhat
+-/
+
+src/Init/Data/BitVec/BasicAux.lean
+----------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Hendrix, Wojciech Nawrocki, Leonardo de Moura, Mario Carneiro, Alex Keizer, Harun Khan, Abdalrhman M Mohamed
+-/
+
+src/Init/Data/BitVec/Bitblast.lean
+----------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Harun Khan, Abdalrhman M Mohamed, Joe Hendrix, Siddharth Bhat
+-/
+
+src/Init/Data/BitVec/Bootstrap.lean
+-----------------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Hendrix, Harun Khan, Alex Keizer, Abdalrhman M Mohamed, Siddharth Bhat
+-/
+
+src/Init/Data/BitVec/Decidable.lean
+-----------------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Hendrix, Harun Khan, Alex Keizer, Abdalrhman M Mohamed, Siddharth Bhat
+
+-/
+
+src/Init/Data/BitVec/Folds.lean
+-------------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Hendrix, Harun Khan
+-/
+
+src/Init/Data/BitVec/Lemmas.lean
+--------------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Hendrix, Harun Khan, Alex Keizer, Abdalrhman M Mohamed, Siddharth Bhat, Luisa Cicolini
+-/
+
+src/Init/Data/Bool.lean
+-----------------------
+/-
+Copyright (c) 2023 F. G. Dorais. No rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: F. G. Dorais
+-/
+
+src/Init/Data/ByteArray.lean
+----------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/ByteArray/Basic.lean
+----------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/ByteArray/Bootstrap.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/ByteArray/Extra.lean
+----------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/ByteArray/Lemmas.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/Cast.lean
+-----------------------
+/-
+Copyright (c) 2014 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Gabriel Ebner
+-/
+
+src/Init/Data/Char.lean
+-----------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Char/Basic.lean
+-----------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Char/Lemmas.lean
+------------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Char/Order.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Char/Ordinal.lean
+-------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/Dyadic.lean
+-------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Dyadic/Basic.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Robin Arnez
+-/
+
+src/Init/Data/Dyadic/Instances.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Robin Arnez
+-/
+
+src/Init/Data/Dyadic/Inv.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Dyadic/Round.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Fin.lean
+----------------------
+/-
+Copyright (c) 2017 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Fin/Basic.lean
+----------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Robert Y. Lewis, Keeley Hoek, Mario Carneiro
+-/
+
+src/Init/Data/Fin/Bitwise.lean
+------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/Fin/Fold.lean
+---------------------------
+/-
+Copyright (c) 2023 François G. Dorais. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: François G. Dorais
+-/
+
+src/Init/Data/Fin/Iterate.lean
+------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Hendrix
+-/
+
+src/Init/Data/Fin/Lemmas.lean
+-----------------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Leonardo de Moura
+-/
+
+src/Init/Data/Fin/Log2.lean
+---------------------------
+/-
+Copyright (c) 2022 Henrik Böving. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/Fin/OverflowAware.lean
+------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/Float.lean
+------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Float/Float.lean
+------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Julia M. Himmel
+-/
+
+src/Init/Data/Float/Float32.lean
+--------------------------------
+/-
+Copyright (c) 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model.lean
+------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Float.lean
+------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Float32.lean
+--------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Format.lean
+-------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Format/Basic.lean
+-------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Format/Valid.lean
+-------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked.lean
+---------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Basic.lean
+---------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations.lean
+--------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/Add.lean
+------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/Compare.lean
+----------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/Div.lean
+------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/Mul.lean
+------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/OfNat.lean
+--------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/OfScientific.lean
+---------------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/Sign.lean
+-------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/Sqrt.lean
+-------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/Status.lean
+---------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/Sub.lean
+------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Operations/ToNat.lean
+--------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Pack.lean
+--------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Pack/Basic.lean
+--------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Pack/Lemmas.lean
+---------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Round.lean
+---------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Float/Model/Unpacked/Sign.lean
+--------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/FloatArray.lean
+-----------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/FloatArray/Basic.lean
+-----------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Format.lean
+-------------------------
+/-
+Copyright (c) 2018 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Format/Basic.lean
+-------------------------------
+/-
+Copyright (c) 2018 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Format/Instances.lean
+-----------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Format/Macro.lean
+-------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Format/Syntax.lean
+--------------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Function.lean
+---------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Hashable.lean
+---------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Int.lean
+----------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Int/Basic.lean
+----------------------------
+/-
+Copyright (c) 2016 Jeremy Avigad. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Leonardo de Moura
+
+The integers, with addition, multiplication, and subtraction.
+-/
+
+src/Init/Data/Int/Bitwise.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Int/Bitwise/Basic.lean
+------------------------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro
+-/
+
+src/Init/Data/Int/Bitwise/Lemmas.lean
+-------------------------------------
+/-
+Copyright (c) 2023 Siddharth Bhat. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Siddharth Bhat, Jeremy Avigad
+-/
+
+src/Init/Data/Int/Compare.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Mario Carneiro, Paul Reichert
+-/
+
+src/Init/Data/Int/Cooper.lean
+-----------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Int/DivMod.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Int/DivMod/Basic.lean
+-----------------------------------
+/-
+Copyright (c) 2016 Jeremy Avigad. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Mario Carneiro
+-/
+
+src/Init/Data/Int/DivMod/Bootstrap.lean
+---------------------------------------
+/-
+Copyright (c) 2016 Jeremy Avigad. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Mario Carneiro
+-/
+
+src/Init/Data/Int/DivMod/Lemmas.lean
+------------------------------------
+/-
+Copyright (c) 2016 Jeremy Avigad. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Mario Carneiro, Kim Morrison, Markus Himmel
+-/
+
+src/Init/Data/Int/DivMod/Pow.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Int/Gcd.lean
+--------------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Markus Himmel
+-/
+
+src/Init/Data/Int/Lemmas.lean
+-----------------------------
+/-
+Copyright (c) 2016 Jeremy Avigad. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Deniz Aydin, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/Int/LemmasAux.lean
+--------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Int/Linear.lean
+-----------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Int/OfNat.lean
+----------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Int/Order.lean
+----------------------------
+/-
+Copyright (c) 2016 Jeremy Avigad. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Deniz Aydin, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/Int/Pow.lean
+--------------------------
+/-
+Copyright (c) 2016 Jeremy Avigad. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Deniz Aydin, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/Int/Repr.lean
+---------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Int/ToString.lean
+-------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia Markus Himmel
+-/
+
+src/Init/Data/Iterators.lean
+----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Basic.lean
+----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators.lean
+----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Append.lean
+-----------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Attach.lean
+-----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/FilterMap.lean
+--------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/FlatMap.lean
+------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Monadic.lean
+------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Monadic/Append.lean
+-------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Monadic/Attach.lean
+-------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Monadic/FilterMap.lean
+----------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Monadic/FlatMap.lean
+--------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Monadic/Take.lean
+-----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Monadic/ULift.lean
+------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/Take.lean
+---------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Combinators/ULift.lean
+----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Access.lean
+---------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Collect.lean
+----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Loop.lean
+-------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Monadic.lean
+----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Monadic/Access.lean
+-----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Monadic/Collect.lean
+------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Monadic/Loop.lean
+---------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Monadic/Partial.lean
+------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Monadic/Total.lean
+----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Partial.lean
+----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Stream.lean
+---------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Consumers/Total.lean
+--------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Internal.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Internal/LawfulMonadLiftFunction.lean
+-------------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Basic.lean
+-----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators.lean
+-----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Append.lean
+------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Attach.lean
+------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/FilterMap.lean
+---------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/FlatMap.lean
+-------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Monadic.lean
+-------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Monadic/Append.lean
+--------------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Monadic/Attach.lean
+--------------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Monadic/FilterMap.lean
+-----------------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Monadic/FlatMap.lean
+---------------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Monadic/Take.lean
+------------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Monadic/ULift.lean
+-------------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/Take.lean
+----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Combinators/ULift.lean
+-----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Consumers.lean
+---------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Consumers/Access.lean
+----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Consumers/Collect.lean
+-----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Consumers/Loop.lean
+--------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Consumers/Monadic.lean
+-----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Consumers/Monadic/Collect.lean
+-------------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Consumers/Monadic/Loop.lean
+----------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Monadic/Basic.lean
+-------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Producers.lean
+---------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Producers/List.lean
+--------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Producers/Monadic.lean
+-----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Lemmas/Producers/Monadic/List.lean
+----------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/PostconditionMonad.lean
+-----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Producers.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Producers/List.lean
+-------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Producers/Monadic.lean
+----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/Producers/Monadic/List.lean
+---------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Iterators/ToIterator.lean
+---------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/LawfulHashable.lean
+---------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/List.lean
+-----------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/List/Attach.lean
+------------------------------
+/-
+Copyright (c) 2023 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro
+-/
+
+src/Init/Data/List/Basic.lean
+-----------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/List/BasicAux.lean
+--------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/List/Control.lean
+-------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/List/ControlImpl.lean
+-----------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/List/Count.lean
+-----------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/Erase.lean
+-----------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro,
+  Yury Kudryashov
+-/
+
+src/Init/Data/List/FinRange.lean
+--------------------------------
+/-
+Copyright (c) 2024 François G. Dorais. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: François G. Dorais
+-/
+
+src/Init/Data/List/Find.lean
+----------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro,
+  Kim Morrison, Jannis Limperg
+-/
+
+src/Init/Data/List/Impl.lean
+----------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/List/Int.lean
+---------------------------
+/-
+Copyright (c) 2026 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/List/Int/Prod.lean
+--------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Int/Sum.lean
+-------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Sebastian Graf, Paul Reichert
+-/
+
+src/Init/Data/List/Lemmas.lean
+------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro,
+  Kim Morrison
+-/
+
+src/Init/Data/List/Lex.lean
+---------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/MapIdx.lean
+------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Mario Carneiro
+-/
+
+src/Init/Data/List/MinMax.lean
+------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/MinMaxIdx.lean
+---------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/List/MinMaxOn.lean
+--------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/List/Monadic.lean
+-------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/Nat.lean
+---------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Nat/BEq.lean
+-------------------------------
+/-
+Copyright (c) 2024 Lean FRO All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Nat/Basic.lean
+---------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/Nat/Count.lean
+---------------------------------
+/-
+Copyright (c) 2024 Kim Morrison. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Nat/Erase.lean
+---------------------------------
+/-
+Copyright (c) 2024 Kim Morrison. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Nat/Find.lean
+--------------------------------
+/-
+Copyright (c) 2024 Kim Morrison. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Nat/InsertIdx.lean
+-------------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/Nat/Modify.lean
+----------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/Nat/Pairwise.lean
+------------------------------------
+/-
+Copyright (c) 2018 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, James Gallicchio
+-/
+
+src/Init/Data/List/Nat/Perm.lean
+--------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Nat/Prod.lean
+--------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Nat/Range.lean
+---------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/Nat/Sublist.lean
+-----------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Nat/Sum.lean
+-------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Sebastian Graf, Paul Reichert
+-/
+
+src/Init/Data/List/Nat/TakeDrop.lean
+------------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/Notation.lean
+--------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/List/OfFn.lean
+----------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Kim Morrison
+-/
+
+src/Init/Data/List/Pairwise.lean
+--------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/Perm.lean
+----------------------------
+/-
+Copyright (c) 2015 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Mario Carneiro
+-/
+
+src/Init/Data/List/Range.lean
+-----------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/Scan.lean
+----------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/List/Scan/Basic.lean
+----------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Chad Sharp
+-/
+
+src/Init/Data/List/Scan/Lemmas.lean
+-----------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro, Chad Sharp
+-/
+
+src/Init/Data/List/Sort.lean
+----------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Sort/Basic.lean
+----------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Sort/Impl.lean
+---------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/List/Sort/Lemmas.lean
+-----------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Eric Wieser, François G. Dorais
+-/
+
+src/Init/Data/List/SplitOn.lean
+-------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/List/SplitOn/Basic.lean
+-------------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/List/SplitOn/Lemmas.lean
+--------------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro, Markus Himmel
+-/
+
+src/Init/Data/List/Sublist.lean
+-------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro,
+  Kim Morrison
+-/
+
+src/Init/Data/List/TakeDrop.lean
+--------------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/List/ToArray.lean
+-------------------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro
+-/
+
+src/Init/Data/List/ToArrayImpl.lean
+-----------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/List/Zip.lean
+---------------------------
+/-
+Copyright (c) 2014 Parikshit Khanna. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Parikshit Khanna, Jeremy Avigad, Leonardo de Moura, Floris van Doorn, Mario Carneiro
+-/
+
+src/Init/Data/Nat.lean
+----------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Nat/Basic.lean
+----------------------------
+/-
+Copyright (c) 2014 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Floris van Doorn, Leonardo de Moura
+-/
+
+src/Init/Data/Nat/Bitwise.lean
+------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Nat/Bitwise/Basic.lean
+------------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Nat/Bitwise/Lemmas.lean
+-------------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Hendrix
+-/
+
+src/Init/Data/Nat/Compare.lean
+------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Mario Carneiro
+-/
+
+src/Init/Data/Nat/Control.lean
+------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Nat/Coprime.lean
+------------------------------
+/-
+Copyright (c) 2014 Jeremy Avigad. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/Nat/Div.lean
+--------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Nat/Div/Basic.lean
+--------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Nat/Div/Lemmas.lean
+---------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Nat/Dvd.lean
+--------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Mario Carneiro
+-/
+
+src/Init/Data/Nat/Fold.lean
+---------------------------
+/-
+Copyright (c) 2014 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Floris van Doorn, Leonardo de Moura, Kim Morrison
+-/
+
+src/Init/Data/Nat/Gcd.lean
+--------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Leonardo de Moura, Mario Carneiro, Markus Himmel
+-/
+
+src/Init/Data/Nat/Internal.lean
+-------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel
+-/
+
+src/Init/Data/Nat/Internal/Linear.lean
+--------------------------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Nat/Internal/SOM.lean
+-----------------------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Nat/Lcm.lean
+--------------------------
+/-
+Copyright (c) 2014 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Jeremy Avigad, Leonardo de Moura, Mario Carneiro, Markus Himmel
+-/
+
+src/Init/Data/Nat/Lemmas.lean
+-----------------------------
+/-
+Copyright (c) 2014 Floris van Doorn (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Mario Carneiro, Floris van Doorn
+-/
+
+src/Init/Data/Nat/Log2.lean
+---------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Gabriel Ebner, Robin Arnez
+-/
+
+src/Init/Data/Nat/MinMax.lean
+-----------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Mario Carneiro
+-/
+
+src/Init/Data/Nat/Mod.lean
+--------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Nat/Order.lean
+----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Nat/Power2.lean
+-----------------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Nat/Power2/Basic.lean
+-----------------------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Nat/Power2/Bitwise.lean
+-------------------------------------
+/-
+Copyright (c) 2026 George Rennie. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: George Rennie
+-/
+
+src/Init/Data/Nat/Power2/Lemmas.lean
+------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia M. Himmel, Adomas Baliuka
+-/
+
+src/Init/Data/Nat/Simproc.lean
+------------------------------
+/-
+Copyright (c) 2023 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joe Hendrix
+-/
+
+src/Init/Data/Nat/Sqrt.lean
+---------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Mario Carneiro
+-/
+
+src/Init/Data/Nat/Sqrt/Basic.lean
+---------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Mario Carneiro
+-/
+
+src/Init/Data/Nat/Sqrt/Lemmas.lean
+----------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Mario Carneiro
+-/
+
+src/Init/Data/Nat/ToString.lean
+-------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Marcus Rossel, Paul Reichert
+-/
+
+src/Init/Data/NeZero.lean
+-------------------------
+/-
+Copyright (c) 2021 Eric Rodriguez. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Eric Rodriguez
+-/
+
+src/Init/Data/OfScientific.lean
+-------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/OfScientific/Basic.lean
+-------------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Option.lean
+-------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Option/Array.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/Option/Attach.lean
+--------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Option/Basic.lean
+-------------------------------
+/-
+Copyright (c) 2014 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/Option/BasicAux.lean
+----------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Option/Coe.lean
+-----------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/Option/Function.lean
+----------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/Option/Instances.lean
+-----------------------------------
+/-
+Copyright (c) 2017 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Option/Lemmas.lean
+--------------------------------
+/-
+Copyright (c) 2017 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro
+-/
+
+src/Init/Data/Option/List.lean
+------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Option/Monadic.lean
+---------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Ord.lean
+----------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Ord/Array.lean
+----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel, Paul Reichert, Robin Arnez
+-/
+
+src/Init/Data/Ord/Basic.lean
+----------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Dany Fabian, Sebastian Ullrich
+-/
+
+src/Init/Data/Ord/BitVec.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel, Paul Reichert, Robin Arnez
+-/
+
+src/Init/Data/Ord/SInt.lean
+---------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel, Paul Reichert, Robin Arnez
+-/
+
+src/Init/Data/Ord/String.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel, Paul Reichert, Robin Arnez
+-/
+
+src/Init/Data/Ord/UInt.lean
+---------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel, Paul Reichert, Robin Arnez
+-/
+
+src/Init/Data/Ord/Vector.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel, Paul Reichert, Robin Arnez
+-/
+
+src/Init/Data/Order.lean
+------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Order/Classes.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Order/ClassesExtra.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Order/Factories.lean
+----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Order/FactoriesExtra.lean
+---------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Order/Lemmas.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Order/LemmasExtra.lean
+------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Order/MinMaxOn.lean
+---------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Order/Opposite.lean
+---------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Order/Ord.lean
+----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel, Paul Reichert, Robin Arnez
+-/
+
+src/Init/Data/Order/PackageFactories.lean
+-----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/PLift.lean
+------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Prod.lean
+-----------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/Queue.lean
+------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Daniel Selsam
+
+Simple queue implemented using two lists.
+Note: this is only a temporary placeholder.
+-/
+
+src/Init/Data/RArray.lean
+-------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner
+-/
+
+src/Init/Data/Random.lean
+-------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Range.lean
+------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Range/Basic.lean
+------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/Range/Lemmas.lean
+-------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Range/Polymorphic.lean
+------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/Basic.lean
+------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/BitVec.lean
+-------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/Char.lean
+-----------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/Range/Polymorphic/Fin.lean
+----------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/Range/Polymorphic/GetElemTactic.lean
+--------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/Instances.lean
+----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/Int.lean
+----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/IntLemmas.lean
+----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Alexander Bentkamp
+-/
+
+src/Init/Data/Range/Polymorphic/Internal/SignedBitVec.lean
+----------------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/Iterators.lean
+----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/Lemmas.lean
+-------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/Map.lean
+----------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/Range/Polymorphic/Nat.lean
+----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/NatLemmas.lean
+----------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/PRange.lean
+-------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/RangeIterator.lean
+--------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/SInt.lean
+-----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/Stream.lean
+-------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/UInt.lean
+-----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Range/Polymorphic/UpwardEnumerable.lean
+-----------------------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Rat.lean
+----------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Rat/Basic.lean
+----------------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro
+-/
+
+src/Init/Data/Rat/Lemmas.lean
+-----------------------------
+/-
+Copyright (c) 2022 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Johannes Hölzl, Robin Arnez
+-/
+
+src/Init/Data/Repr.lean
+-----------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/SInt.lean
+-----------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/SInt/Basic.lean
+-----------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/SInt/Bitwise.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/SInt/Float.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/SInt/Float32.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/SInt/IntToBitVec.lean
+-----------------------------------
+/-
+Copyright (c) 2026 Lean FRO LLC or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/SInt/Lemmas.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/Slice.lean
+------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/Array.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/Array/Basic.lean
+------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/Array/Iterator.lean
+---------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/Array/Lemmas.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/Basic.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/InternalLemmas.lean
+---------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/Lemmas.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/List.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/List/Basic.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/List/Iterator.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/List/Lemmas.lean
+------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/Notation.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Slice/Operations.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Stream.lean
+-------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Ullrich, Andrew Kent, Leonardo de Moura
+-/
+
+src/Init/Data/String.lean
+-------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/String/Basic.lean
+-------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Mario Carneiro, Markus Himmel
+-/
+
+src/Init/Data/String/Bootstrap.lean
+-----------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/String/Decode.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Defs.lean
+------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/String/Extra.lean
+-------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/String/FindPos.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Hashable.lean
+----------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Iter.lean
+------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Iter/Basic.lean
+------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Iter/Intercalate.lean
+------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia Markus Himmel
+-/
+
+src/Init/Data/String/Iterate.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving, Markus Himmel
+-/
+
+src/Init/Data/String/Iterator.lean
+----------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/String/Legacy.lean
+--------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/String/Lemmas.lean
+--------------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/String/Lemmas/Basic.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/FindPos.lean
+----------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Hashable.lean
+-----------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Intercalate.lean
+--------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/IsEmpty.lean
+----------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Iter.lean
+-------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Iterate.lean
+----------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Length.lean
+---------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Modify.lean
+---------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Order.lean
+--------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern.lean
+----------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Basic.lean
+----------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Char.lean
+---------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Find.lean
+---------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Find/Basic.lean
+---------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Find/Char.lean
+--------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Find/Pred.lean
+--------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Find/String.lean
+----------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Memcmp.lean
+-----------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Pred.lean
+---------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Split.lean
+----------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Split/Basic.lean
+----------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Split/Char.lean
+---------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/Split/Pred.lean
+---------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/String.lean
+-----------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/String/Basic.lean
+-----------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/String/ForwardPattern.lean
+--------------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/String/ForwardSearcher.lean
+---------------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/TakeDrop.lean
+-------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/TakeDrop/Basic.lean
+-------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/TakeDrop/Char.lean
+------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/TakeDrop/Pred.lean
+------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Pattern/TakeDrop/String.lean
+--------------------------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Search.lean
+---------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Slice.lean
+--------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/Splits.lean
+---------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Lemmas/StringOrder.lean
+--------------------------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/String/Lemmas/TakeDrop.lean
+-----------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Julia Markus Himmel
+-/
+
+src/Init/Data/String/Length.lean
+--------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Julia Markus Himmel
+-/
+
+src/Init/Data/String/Modify.lean
+--------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/String/OrderInstances.lean
+----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/Pattern.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/String/Pattern/Basic.lean
+---------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving, Markus Himmel
+-/
+
+src/Init/Data/String/Pattern/Char.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving, Markus Himmel
+-/
+
+src/Init/Data/String/Pattern/Pred.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving, Markus Himmel
+-/
+
+src/Init/Data/String/Pattern/String.lean
+----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/String/PosRaw.lean
+--------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/String/Search.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Slice.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving, Markus Himmel
+-/
+
+src/Init/Data/String/Stream.lean
+--------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Ullrich, Andrew Kent, Leonardo de Moura
+-/
+
+src/Init/Data/String/Subslice.lean
+----------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/String/Substring.lean
+-----------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Data/String/TakeDrop.lean
+----------------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura, Mario Carneiro, Markus Himmel
+-/
+
+src/Init/Data/String/Termination.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Markus Himmel
+-/
+
+src/Init/Data/String/ToSlice.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel
+-/
+
+src/Init/Data/Subtype.lean
+--------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Subtype/Basic.lean
+--------------------------------
+/-
+Copyright (c) 2017 Johannes Hölzl. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Johannes Hölzl
+-/
+
+src/Init/Data/Subtype/Order.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Subtype/OrderExtra.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/Data/Sum.lean
+----------------------
+/-
+Copyright (c) 2017 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Yury G. Kudryashov
+-/
+
+src/Init/Data/Sum/Basic.lean
+----------------------------
+/-
+Copyright (c) 2017 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Yury G. Kudryashov
+-/
+
+src/Init/Data/Sum/Lemmas.lean
+-----------------------------
+/-
+Copyright (c) 2017 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Yury G. Kudryashov
+-/
+
+src/Init/Data/ToString.lean
+---------------------------
+/-
+Copyright (c) 2016 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/ToString/Basic.lean
+---------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/ToString/Extra.lean
+---------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/ToString/Macro.lean
+---------------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/Data/ToString/Name.lean
+--------------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura and Sebastian Ullrich
+-/
+
+src/Init/Data/UInt.lean
+-----------------------
+/-
+Copyright (c) 2022 Henrik Böving. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/UInt/Basic.lean
+-----------------------------
+/-
+Copyright (c) 2018 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/UInt/BasicAux.lean
+--------------------------------
+/-
+Copyright (c) 2018 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Data/UInt/Bitwise.lean
+-------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Markus Himmel, Mac Malone
+-/
+
+src/Init/Data/UInt/IntToBitVec.lean
+-----------------------------------
+/-
+Copyright (c) 2026 Lean FRO LLC or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/UInt/Lemmas.lean
+------------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, François G. Dorais, Mario Carneiro, Mac Malone, Markus Himmel
+-/
+
+src/Init/Data/UInt/Log2.lean
+----------------------------
+/-
+Copyright (c) 2022 Henrik Böving. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Henrik Böving
+-/
+
+src/Init/Data/ULift.lean
+------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector.lean
+-------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Algebra.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Attach.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Basic.lean
+-------------------------------
+/-
+Copyright (c) 2024 Shreyas Srinivas. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Shreyas Srinivas, François G. Dorais, Kim Morrison
+-/
+
+src/Init/Data/Vector/Count.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/DecidableEq.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Erase.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Extract.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/FinRange.lean
+----------------------------------
+/-
+Copyright (c) 2024 François G. Dorais. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: François G. Dorais
+-/
+
+src/Init/Data/Vector/Find.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/InsertIdx.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Int.lean
+-----------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Sebastian Graf, Paul Reichert
+-/
+
+src/Init/Data/Vector/Lemmas.lean
+--------------------------------
+/-
+Copyright (c) 2024 Shreyas Srinivas. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Shreyas Srinivas, Francois Dorais, Kim Morrison
+-/
+
+src/Init/Data/Vector/Lex.lean
+-----------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/MapIdx.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Monadic.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Nat.lean
+-----------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison, Sebastian Graf, Paul Reichert
+-/
+
+src/Init/Data/Vector/OfFn.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Perm.lean
+------------------------------
+/-
+Copyright (c) 2024 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Range.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Vector/Stream.lean
+--------------------------------
+/-
+Copyright (c) 2024 Shreyas Srinivas. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Shreyas Srinivas, François G. Dorais, Kim Morrison
+-/
+
+src/Init/Data/Vector/Zip.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Data/Zero.lean
+-----------------------
+/-
+Copyright (c) 2021 Gabriel Ebner. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Gabriel Ebner, Mario Carneiro
+-/
+
+src/Init/Dynamic.lean
+---------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+
+Authors: Gabriel Ebner
+-/
+
+src/Init/Ext.lean
+-----------------
+/-
+Copyright (c) 2021 Gabriel Ebner. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Gabriel Ebner, Mario Carneiro
+-/
+
+src/Init/GetElem.lean
+---------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Grind.lean
+-------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/AC.lean
+----------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Annotated.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Attr.lean
+------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Cases.lean
+-------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Config.lean
+--------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Ext.lean
+-----------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/FieldNormNum.lean
+--------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Homo.lean
+------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/BitVec.lean
+-------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/Fin.lean
+----------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/ISize.lean
+------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/Int.lean
+----------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/Int16.lean
+------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/Int32.lean
+------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/Int64.lean
+------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/Int8.lean
+-----------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/List.lean
+-----------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/Nat.lean
+----------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/UInt16.lean
+-------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/UInt32.lean
+-------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/UInt64.lean
+-------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/UInt8.lean
+------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Homo/USize.lean
+------------------------------
+/-
+Copyright (c) 2026 Andres Erbsen. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Andres Erbsen, Leonardo de Moura
+-/
+
+src/Init/Grind/Injective.lean
+-----------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Interactive.lean
+-------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Lemmas.lean
+--------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Lint.lean
+------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Module.lean
+--------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Module/Basic.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Module/Envelope.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Module/NatModuleNorm.lean
+----------------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Module/OfNatModule.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Norm.lean
+------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Offset.lean
+--------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Order.lean
+-------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Ordered.lean
+---------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Ordered/Field.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Ordered/Int.lean
+-------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Ordered/Linarith.lean
+------------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Ordered/Module.lean
+----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Ordered/Order.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Ordered/Rat.lean
+-------------------------------
+/-
+Copyright (c) 2025 Robin Arnez. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Robin Arnez
+-/
+
+src/Init/Grind/Ordered/Ring.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/PP.lean
+----------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Propagator.lean
+------------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Ring.lean
+------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Ring/Basic.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Ring/CommSemiringAdapter.lean
+--------------------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Ring/CommSolver.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Ring/Envelope.lean
+---------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Kim Morrison
+-/
+
+src/Init/Grind/Ring/Field.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Ring/OfScientific.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Ring/ToInt.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/Tactics.lean
+---------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/ToInt.lean
+-------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Grind/ToIntLemmas.lean
+-------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Grind/Util.lean
+------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/GrindInstances.lean
+----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/GrindInstances/Nat.lean
+--------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/GrindInstances/Ring.lean
+---------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/GrindInstances/Ring/BitVec.lean
+----------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/GrindInstances/Ring/Fin.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/GrindInstances/Ring/Int.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/GrindInstances/Ring/Nat.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/GrindInstances/Ring/Rat.lean
+-------------------------------------
+/-
+Copyright (c) 2025 Robin Arnez. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Robin Arnez
+-/
+
+src/Init/GrindInstances/Ring/SInt.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/GrindInstances/Ring/UInt.lean
+--------------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/GrindInstances/ToInt.lean
+----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Guard.lean
+-------------------
+/-
+Copyright (c) 2021 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro
+-/
+
+src/Init/Hints.lean
+-------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Internal.lean
+----------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner
+-/
+
+src/Init/Internal/Order.lean
+----------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner
+-/
+
+src/Init/Internal/Order/Basic.lean
+----------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner
+-/
+
+src/Init/Internal/Order/Lemmas.lean
+-----------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner
+-/
+
+src/Init/Internal/Order/MonadTail.lean
+--------------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Graf
+-/
+
+src/Init/Internal/Order/Tactic.lean
+-----------------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner
+-/
+
+src/Init/Internal/Order/While.lean
+----------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Graf
+-/
+
+src/Init/LawfulBEqTactics.lean
+------------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner
+-/
+
+src/Init/LetFun.lean
+--------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/MacroTrace.lean
+------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+
+Extra notation that depends on Init/Meta
+-/
+
+src/Init/Meta.lean
+------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura and Sebastian Ullrich
+
+Additional goodies for writing macros
+-/
+
+src/Init/Meta/Defs.lean
+-----------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura and Sebastian Ullrich
+
+Additional goodies for writing macros
+-/
+
+src/Init/MetaTypes.lean
+-----------------------
+/-
+Copyright (c) Leonardo de Moura. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/MethodSpecsSimp.lean
+-----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Joachim Breitner
+-/
+
+src/Init/Notation.lean
+----------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+
+Notation for operators defined at Prelude.lean
+-/
+
+src/Init/NotationExtra.lean
+---------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+
+Extra notation that depends on Init/Meta
+-/
+
+src/Init/Omega.lean
+-------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Omega/Coeffs.lean
+--------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Omega/Constraint.lean
+------------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Omega/Int.lean
+-----------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Omega/IntList.lean
+---------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Omega/LinearCombo.lean
+-------------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Omega/Logic.lean
+-------------------------
+/-
+Copyright (c) 2023 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Kim Morrison
+-/
+
+src/Init/Prelude.lean
+---------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/PropLemmas.lean
+------------------------
+/-
+Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Jeremy Avigad, Floris van Doorn, Mario Carneiro
+
+This provides additional lemmas about propositional types beyond what is
+needed for Core and SimpLemmas.
+-/
+
+src/Init/RCases.lean
+--------------------
+/-
+Copyright (c) 2017 Mario Carneiro. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Mario Carneiro, Jacob von Raumer
+-/
+
+src/Init/ShareCommon.lean
+-------------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/SimpLemmas.lean
+------------------------
+/-
+Copyright (c) 2021 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+
+notation, basic datatypes and type classes
+-/
+
+src/Init/Simproc.lean
+---------------------
+/-
+Copyright (c) 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/SizeOf.lean
+--------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/SizeOfLemmas.lean
+--------------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Sym.lean
+-----------------
+/-
+Copyright (c) 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Sym/DSimp/DSimprocDSL.lean
+-----------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Sym/Lemmas.lean
+------------------------
+/-
+Copyright (c) 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Sym/Simp/SimprocDSL.lean
+---------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Syntax.lean
+--------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/System.lean
+--------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/System/CancelToken.lean
+--------------------------------
+/-
+Copyright (c) 2026 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Ullrich
+-/
+
+src/Init/System/FilePath.lean
+-----------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Sebastian Ullrich
+-/
+
+src/Init/System/IO.lean
+-----------------------
+/-
+Copyright (c) 2017 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Luke Nelson, Jared Roesch, Leonardo de Moura, Sebastian Ullrich, Mac Malone, Henrik Böving
+-/
+
+src/Init/System/IOError.lean
+----------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Simon Hudon
+-/
+
+src/Init/System/Platform.lean
+-----------------------------
+/-
+Copyright (c) 2018 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/System/Promise.lean
+----------------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Gabriel Ebner
+-/
+
+src/Init/System/ST.lean
+-----------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/System/Uri.lean
+------------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Chris Lovett
+-/
+
+src/Init/Tactics.lean
+---------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/TacticsExtra.lean
+--------------------------
+/-
+Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura, Mario Carneiro
+-/
+
+src/Init/Task.lean
+------------------
+/-
+Copyright (c) 2025 Lean FRO. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Sebastian Ullrich
+
+Additional `Task` definitions.
+-/
+
+src/Init/Try.lean
+-----------------
+/-
+Copyright (c) 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/Util.lean
+------------------
+/-
+Copyright (c) 2019 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/
+
+src/Init/WF.lean
+----------------
+/-
+Copyright (c) 2014 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/WFComputable.lean
+--------------------------
+/-
+Copyright (c) 2023 Miyahara Kō. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Miyahara Kō
+-/
+
+src/Init/WFExtrinsicFix.lean
+----------------------------
+/-
+Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Paul Reichert
+-/
+
+src/Init/WFTactics.lean
+-----------------------
+/-
+Copyright (c) 2022 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Author: Leonardo de Moura
+-/
+
+src/Init/While.lean
+-------------------
+/-
+Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: Leonardo de Moura
+-/

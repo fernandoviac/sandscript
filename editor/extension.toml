@@ -1,0 +1,12 @@
+id = "sandscript"
+name = "SandScript"
+version = "0.1.0"
+schema_version = 1
+description = "SandScript language support — syntax highlighting, indentation, brackets."
+authors = ["Fernando Via Canel"]
+languages = ["languages/sandscript"]
+
+[grammars.sandscript]
+repository = "https://github.com/fernandoviac/sandscript"
+rev = "ece27cc429116b1683f560dc768a93a310c19994"
+path = "editor"

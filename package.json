@@ -1,0 +1,19 @@
+{
+  "name": "sandscript",
+  "version": "0.1.0",
+  "description": "JavaScript with explicit capability grants and a bounded, inspectable, snapshot-capable runtime.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fernandoviac/sandscript.git"
+  },
+  "exports": {
+    ".": "./src/runtime/index.js",
+    "./schema": "./src/schema/index.js",
+    "./runtime": "./src/runtime/index.js"
+  }
+}

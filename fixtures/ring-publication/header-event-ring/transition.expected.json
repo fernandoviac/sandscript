@@ -1,0 +1,24 @@
+{
+  "status": "ok",
+  "segmentGeneration": 2,
+  "capacity": 4,
+  "reservationHead": 1,
+  "newestCommitted": 1,
+  "oldestAvailable": 1,
+  "gap": null,
+  "entries": [
+    {
+      "kind": 0,
+      "kindName": "FIELD_WRITE",
+      "field": 0,
+      "fieldName": "NONE",
+      "site": 0,
+      "siteName": "UNKNOWN",
+      "slot": null,
+      "oldValue": 1,
+      "newValue": 38,
+      "index": 1
+    }
+  ],
+  "truncation": null
+}

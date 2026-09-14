@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RUNNING</title>
+</head>
+<body>
+<h1>SandScript Schema browser smoke test</h1>
+<p>Exercises the Schema global — compile, test/validate/assert/errors,
+the one-shots, bundles, malformed-schema and excluded-regex rejection,
+tiny-fuel pauses with GC — and the standalone host binding, inside a
+real browser (the interpreter instantiates both engines asynchronously
+here, past Chrome's synchronous-compile cap).</p>
+<pre id="results" role="status" aria-live="polite">running…</pre>
+<script type="module">
+import { freshSession } from '../../src/host-owned-session.js';
+import { parseAndSetup } from '../fuel/test-helpers.js';
+import { createSchemaEngine } from '../../src/schema/index.js';
+
+const failures = [];
+const passes = [];
+
+function check(name, actual, expected) {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a === e) passes.push(name);
+  else failures.push(`${name}: got ${a}, want ${e}`);
+}
+
+function run(source) {
+  const session = freshSession({ inlineSource: true });
+  parseAndSetup(session, source);
+  const result = session.run(0, 100000000);
+  if (result.status !== 'done') {
+    throw new Error(`run did not complete: ${result.status}`);
+  }
+  return session;
+}
+
+try {
+  const s1 = run(String.raw`
+    const s = Schema.compile({
+      type: 'object', required: ['kind', 'id'],
+      properties: { kind: { const: 'landing' }, id: { type: 'string', pattern: '^[a-z]+-[0-9]+$' } },
+      additionalProperties: false,
+    });
+    let ok = s.test({ kind: 'landing', id: 'ab-1' });
+    let bad = s.test({ kind: 'landing', id: 'AB' });
+    let v = s.validate({ id: 'ab-1', extra: 1 });
+    let msgs = v.errors.map((e) => e.keyword + '@' + e.instancePath + ': ' + e.message);
+    let props = [s.kind, s.dialect, Schema.isSchema(s), s instanceof Schema, typeof s];
+    let one = [Schema.test({ type: 'integer' }, 3), Schema.validate({ type: 'integer' }, 'x').valid];
+    let asserted = null;
+    try { s.assert({ kind: 'x' }); } catch (e) { asserted = [e.name, e.message, e.errors.length]; }
+    let bundle = Schema.compile({ $ref: 'https://example.com/point' }, {
+      schemas: [['https://example.com/point', { type: 'object', required: ['x'] }]],
+    });
+    let bundled = [bundle.test({ x: 1 }), bundle.test({})];
+    let malformed = null;
+    try { Schema.compile({ type: 'nonsense' }); } catch (e) { malformed = [e.name, e.keyword]; }
+    let excluded = 'no throw';
+    try { Schema.compile({ pattern: '(?<=a)b' }); } catch (e) { excluded = '' + e; }
+  `);
+  check('test', [s1.get(0, 'ok'), s1.get(0, 'bad')], [true, false]);
+  check('validate', s1.get(0, 'v').valid, false);
+  check('messages', s1.get(0, 'msgs'), [
+    'additionalProperties@: must NOT have additional properties',
+    "required@: must have required property 'kind'",
+  ]);
+  check('props', s1.get(0, 'props'), ['schema', '2020-12', true, true, 'object']);
+  check('one-shots', s1.get(0, 'one'), [true, false]);
+  check('assert throws', s1.get(0, 'asserted'), ['TypeError', 'value does not match schema', 2]);
+  check('bundle', s1.get(0, 'bundled'), [true, false]);
+  check('malformed', s1.get(0, 'malformed'), ['SyntaxError', 'type']);
+  check('excluded regex', s1.get(0, 'excluded'), 'TypeError');
+
+  // Tiny-fuel pauses with GC on every pause, in the browser.
+  {
+    const tiny = freshSession({ inlineSource: true });
+    parseAndSetup(tiny, String.raw`
+      const s = Schema.compile({ type: 'array', items: { type: 'string', pattern: '^[a-z]+$' }, uniqueItems: true, minItems: 2 });
+      let r = [s.test(['ab', 'cd']), s.test(['ab', 'ab']), s.validate(['A']).errors.length];
+      let done = 42;
+    `);
+    let pauses = 0;
+    let guard = 0;
+    for (; guard < 500000; guard++) {
+      tiny.mem.wasm.exports.run(1, 0);
+      const condition = tiny.mem.getExitCondition(0);
+      if (condition === 15) { tiny.gc(); continue; }
+      if (condition === 2) { pauses++; tiny.gc(); continue; }
+      break;
+    }
+    check('tiny-fuel completes', tiny.mem.getExitCondition(0), 1);
+    check('tiny-fuel paused', pauses > 50, true);
+    check('tiny-fuel result', tiny.get(0, 'r'), [true, false, 2]);
+    check('tiny-fuel done', tiny.get(0, 'done'), 42);
+  }
+
+  // The standalone host binding in the browser.
+  {
+    const engine = createSchemaEngine();
+    const compiled = engine.compile({ type: 'object', properties: { n: { minimum: 1 } } });
+    check('host binding', [compiled.test({ n: 1 }), compiled.validate({ n: 0 }).errors[0].message], [true, 'must be >= 1']);
+    compiled.dispose();
+  }
+} catch (e) {
+  failures.push(`threw: ${e && e.message ? e.message : e}`);
+}
+
+const verdict = failures.length === 0 ? 'PASS' : 'FAIL';
+document.title = verdict;
+document.getElementById('results').textContent =
+  `${verdict}\npassed: ${passes.length}\nfailed: ${failures.length}\n` +
+  failures.map((f) => `  ${f}`).join('\n');
+</script>
+</body>
+</html>

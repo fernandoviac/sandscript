@@ -1,0 +1,60 @@
+{
+  "status": "ok",
+  "segmentGeneration": 1,
+  "capacity": 4,
+  "reservationHead": 4294967294,
+  "newestCommitted": 4294967294,
+  "oldestAvailable": 4294967291,
+  "gap": null,
+  "entries": [
+    {
+      "kind": 0,
+      "kindName": "FIELD_WRITE",
+      "field": 0,
+      "fieldName": "NONE",
+      "site": 0,
+      "siteName": "UNKNOWN",
+      "slot": null,
+      "oldValue": 3,
+      "newValue": 100,
+      "index": 4294967291
+    },
+    {
+      "kind": 0,
+      "kindName": "FIELD_WRITE",
+      "field": 0,
+      "fieldName": "NONE",
+      "site": 0,
+      "siteName": "UNKNOWN",
+      "slot": null,
+      "oldValue": 4,
+      "newValue": 131,
+      "index": 4294967292
+    },
+    {
+      "kind": 0,
+      "kindName": "FIELD_WRITE",
+      "field": 0,
+      "fieldName": "NONE",
+      "site": 0,
+      "siteName": "UNKNOWN",
+      "slot": null,
+      "oldValue": 1,
+      "newValue": 38,
+      "index": 4294967293
+    },
+    {
+      "kind": 0,
+      "kindName": "FIELD_WRITE",
+      "field": 0,
+      "fieldName": "NONE",
+      "site": 0,
+      "siteName": "UNKNOWN",
+      "slot": null,
+      "oldValue": 2,
+      "newValue": 69,
+      "index": 4294967294
+    }
+  ],
+  "truncation": null
+}

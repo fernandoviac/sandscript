@@ -1,0 +1,63 @@
+{
+  "status": "ok",
+  "segmentGeneration": 1,
+  "capacity": 4,
+  "reservationHead": 10,
+  "newestCommitted": 10,
+  "oldestAvailable": 7,
+  "gap": {
+    "firstMissingIndex": 1,
+    "lastMissingIndex": 6
+  },
+  "entries": [
+    {
+      "kind": 0,
+      "kindName": "FIELD_WRITE",
+      "field": 0,
+      "fieldName": "NONE",
+      "site": 0,
+      "siteName": "UNKNOWN",
+      "slot": null,
+      "oldValue": 7,
+      "newValue": 224,
+      "index": 7
+    },
+    {
+      "kind": 0,
+      "kindName": "FIELD_WRITE",
+      "field": 0,
+      "fieldName": "NONE",
+      "site": 0,
+      "siteName": "UNKNOWN",
+      "slot": null,
+      "oldValue": 8,
+      "newValue": 255,
+      "index": 8
+    },
+    {
+      "kind": 0,
+      "kindName": "FIELD_WRITE",
+      "field": 0,
+      "fieldName": "NONE",
+      "site": 0,
+      "siteName": "UNKNOWN",
+      "slot": null,
+      "oldValue": 9,
+      "newValue": 286,
+      "index": 9
+    },
+    {
+      "kind": 0,
+      "kindName": "FIELD_WRITE",
+      "field": 0,
+      "fieldName": "NONE",
+      "site": 0,
+      "siteName": "UNKNOWN",
+      "slot": null,
+      "oldValue": 10,
+      "newValue": 317,
+      "index": 10
+    }
+  ],
+  "truncation": null
+}

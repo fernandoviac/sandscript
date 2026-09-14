@@ -1,0 +1,10436 @@
+(module
+  ;; Standalone SandScript JSON Schema engine. The module owns no memory
+  ;; and keeps no state between calls: every address is an absolute offset
+  ;; into caller-owned shared linear memory, every header carries a magic
+  ;; and version, and every fuel-carrying entry point writes a complete
+  ;; continuation before returning PAUSED. Documents and schemas are
+  ;; MessagePack bytes; programs are position-independent (see
+  ;; schema-engine-contract.js, which mirrors every constant below).
+  (import "env" "memory" (memory 1 16384 shared))
+
+  ;; Regex engine exports, instantiated against the same memory before
+  ;; this module. Signatures must match regex-engine.wat exactly.
+  (import "regex" "scan_workspace_size"
+    (func $regex_scan_workspace_size (param i32) (result i32)))
+  (import "regex" "scan_pattern"
+    (func $regex_scan_pattern (param i32 i32 i32 i32 i32 i32) (result i32 i32)))
+  (import "regex" "measured_program_size"
+    (func $regex_measured_program_size (param i32 i32 i32) (result i32)))
+  (import "regex" "emission_workspace_size"
+    (func $regex_emission_workspace_size (param i32) (result i32)))
+  (import "regex" "initialize_program_emission"
+    (func $regex_initialize_program_emission
+      (param i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "regex" "initialize_emission_workspace"
+    (func $regex_initialize_emission_workspace
+      (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "regex" "emit_pattern"
+    (func $regex_emit_pattern (param i32 i32 i32) (result i32 i32)))
+  (import "regex" "validate_program_work"
+    (func $regex_validate_program_work (param i32 i32) (result i32 i64 i32)))
+  (import "regex" "scan_work_charged" (func $regex_scan_work_charged (param i32) (result i64)))
+  (import "regex" "scan_work_overflow" (func $regex_scan_work_overflow (param i32) (result i32)))
+  (import "regex" "emission_work_charged" (func $regex_emission_work_charged (param i32) (result i64)))
+  (import "regex" "emission_work_overflow" (func $regex_emission_work_overflow (param i32) (result i32)))
+  (import "regex" "match_work_charged" (func $regex_match_work_charged (param i32) (result i64)))
+  (import "regex" "match_work_overflow" (func $regex_match_work_overflow (param i32) (result i32)))
+  (import "regex" "continuation_size"
+    (func $regex_continuation_size (param i32 i32 i32) (result i32)))
+  (import "regex" "initialize_match"
+    (func $regex_initialize_match
+      (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "regex" "run_match"
+    (func $regex_run_match (param i32 i32 i32) (result i32 i32)))
+
+  ;; Keyword names, copied into the compile workspace at initialization
+  ;; (the module has no memory of its own). Order matches KEYWORD_NAMES in
+  ;; the contract; code = 1-based index; entries are NUL-terminated.
+  (data $keywords
+    "$ref\00$defs\00definitions\00$id\00id\00$anchor\00$dynamicRef\00"
+    "$dynamicAnchor\00$recursiveRef\00$recursiveAnchor\00$schema\00"
+    "$comment\00$vocabulary\00"
+    "type\00const\00enum\00multipleOf\00maximum\00exclusiveMaximum\00"
+    "minimum\00exclusiveMinimum\00maxLength\00minLength\00pattern\00"
+    "format\00maxItems\00minItems\00uniqueItems\00maxContains\00"
+    "minContains\00maxProperties\00minProperties\00required\00"
+    "dependentRequired\00"
+    "allOf\00anyOf\00oneOf\00not\00if\00then\00else\00properties\00"
+    "patternProperties\00additionalProperties\00propertyNames\00"
+    "dependentSchemas\00dependencies\00prefixItems\00items\00"
+    "additionalItems\00contains\00unevaluatedProperties\00"
+    "unevaluatedItems\00"
+    "contentEncoding\00contentMediaType\00contentSchema\00title\00"
+    "description\00default\00deprecated\00readOnly\00writeOnly\00"
+    "examples\00"
+    "false\00\00")
+  (global $KEYWORDS_BYTES i32 (i32.const 676))
+  (global $KEYWORD_COUNT i32 (i32.const 64))
+
+  ;; ABI status values. Must match SCHEMA_STATUS.
+  (global $STATUS_OK i32 (i32.const 0))
+  (global $STATUS_PAUSED i32 (i32.const 1))
+  (global $STATUS_VALID i32 (i32.const 2))
+  (global $STATUS_INVALID i32 (i32.const 3))
+  (global $STATUS_SYNTAX_ERROR i32 (i32.const 4))
+  (global $STATUS_UNSUPPORTED i32 (i32.const 5))
+  (global $STATUS_LIMIT_EXCEEDED i32 (i32.const 6))
+  (global $STATUS_BUFFER_TOO_SMALL i32 (i32.const 7))
+  (global $STATUS_CORRUPT_PROGRAM i32 (i32.const 8))
+  (global $STATUS_CORRUPT_DOCUMENT i32 (i32.const 9))
+  (global $STATUS_INVALID_UTF8 i32 (i32.const 10))
+
+  (global $NONE i32 (i32.const 0xffffffff))
+  (global $FORMAT_VERSION i32 (i32.const 2))
+
+  ;; Limits (SCHEMA_LIMIT).
+  (global $MAX_SCHEMA_BYTES i32 (i32.const 4194304))
+  (global $MAX_NODES i32 (i32.const 1048576))
+  (global $MAX_KEY_TABLE_ENTRIES i32 (i32.const 65536))
+  (global $MAX_ENUM_MEMBERS i32 (i32.const 65536))
+  (global $MAX_STATIC_DEPTH i32 (i32.const 256))
+  (global $MAX_POINTER_BYTES i32 (i32.const 4096))
+  (global $ERROR_PATH_BYTES i32 (i32.const 128))
+  (global $HASH_DEPTH i32 (i32.const 64))
+
+  ;; JSON type bits (JSON_TYPE).
+  (global $T_NULL i32 (i32.const 1))
+  (global $T_BOOLEAN i32 (i32.const 2))
+  (global $T_NUMBER i32 (i32.const 4))
+  (global $T_INTEGER i32 (i32.const 8))
+  (global $T_STRING i32 (i32.const 16))
+  (global $T_ARRAY i32 (i32.const 32))
+  (global $T_OBJECT i32 (i32.const 64))
+
+  ;; msgpack value kinds (internal).
+  (global $K_INVALID i32 (i32.const -1))
+  (global $K_NIL i32 (i32.const 0))
+  (global $K_FALSE i32 (i32.const 1))
+  (global $K_TRUE i32 (i32.const 2))
+  (global $K_INT i32 (i32.const 3))
+  (global $K_FLOAT i32 (i32.const 4))
+  (global $K_STR i32 (i32.const 5))
+  (global $K_BIN i32 (i32.const 6))
+  (global $K_ARRAY i32 (i32.const 7))
+  (global $K_MAP i32 (i32.const 8))
+  (global $K_EXT i32 (i32.const 9))
+
+  ;; numeric kinds (internal).
+  (global $N_INT i32 (i32.const 0))    ;; i64
+  (global $N_UINT i32 (i32.const 1))   ;; u64 above i64 range
+  (global $N_FLOAT i32 (i32.const 2))  ;; f64
+
+  (global $FNV_OFFSET i32 (i32.const 0x811c9dc5))
+  (global $FNV_PRIME i32 (i32.const 0x01000193))
+
+  (func $format_version (export "format_version") (result i32)
+    (global.get $FORMAT_VERSION))
+
+  ;; ==========================================================================
+  ;; Byte helpers
+  ;; ==========================================================================
+
+  (func $load_be16 (param $addr i32) (result i32)
+    (i32.or
+      (i32.shl (i32.load8_u (local.get $addr)) (i32.const 8))
+      (i32.load8_u offset=1 (local.get $addr))))
+
+  (func $load_be32 (param $addr i32) (result i32)
+    (i32.or
+      (i32.or
+        (i32.shl (i32.load8_u (local.get $addr)) (i32.const 24))
+        (i32.shl (i32.load8_u offset=1 (local.get $addr)) (i32.const 16)))
+      (i32.or
+        (i32.shl (i32.load8_u offset=2 (local.get $addr)) (i32.const 8))
+        (i32.load8_u offset=3 (local.get $addr)))))
+
+  (func $load_be64 (param $addr i32) (result i64)
+    (i64.or
+      (i64.shl (i64.extend_i32_u (call $load_be32 (local.get $addr))) (i64.const 32))
+      (i64.extend_i32_u (call $load_be32 (i32.add (local.get $addr) (i32.const 4))))))
+
+  (func $bytes_equal (param $a i32) (param $b i32) (param $len i32) (result i32)
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.eqz (local.get $len)))
+        (if (i32.ne (i32.load8_u (local.get $a)) (i32.load8_u (local.get $b)))
+          (then (return (i32.const 0))))
+        (local.set $a (i32.add (local.get $a) (i32.const 1)))
+        (local.set $b (i32.add (local.get $b) (i32.const 1)))
+        (local.set $len (i32.sub (local.get $len) (i32.const 1)))
+        (br $loop)))
+    (i32.const 1))
+
+  (func $fnv1a (export "fnv1a") (param $addr i32) (param $len i32) (result i32)
+    (local $hash i32)
+    (local.set $hash (global.get $FNV_OFFSET))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.eqz (local.get $len)))
+        (local.set $hash
+          (i32.mul
+            (i32.xor (local.get $hash) (i32.load8_u (local.get $addr)))
+            (global.get $FNV_PRIME)))
+        (local.set $addr (i32.add (local.get $addr) (i32.const 1)))
+        (local.set $len (i32.sub (local.get $len) (i32.const 1)))
+        (br $loop)))
+    (local.get $hash))
+
+  ;; 64-bit mix folded to 32 bits (for numeric hashes).
+  (func $hash64 (param $v i64) (result i32)
+    (local.set $v (i64.mul (i64.xor (local.get $v) (i64.shr_u (local.get $v) (i64.const 33)))
+                           (i64.const 0xff51afd7ed558ccd)))
+    (local.set $v (i64.mul (i64.xor (local.get $v) (i64.shr_u (local.get $v) (i64.const 33)))
+                           (i64.const 0xc4ceb9fe1a85ec53)))
+    (i32.wrap_i64 (i64.xor (local.get $v) (i64.shr_u (local.get $v) (i64.const 33)))))
+
+  (func $mix32 (param $h i32) (param $v i32) (result i32)
+    (local.set $h (i32.xor (local.get $h) (local.get $v)))
+    (local.set $h (i32.mul (local.get $h) (i32.const 0x9e3779b1)))
+    (i32.xor (local.get $h) (i32.shr_u (local.get $h) (i32.const 15))))
+
+  (func $align4 (param $n i32) (result i32)
+    (i32.and (i32.add (local.get $n) (i32.const 3)) (i32.const -4)))
+
+  (func $align8 (param $n i32) (result i32)
+    (i32.and (i32.add (local.get $n) (i32.const 7)) (i32.const -8)))
+
+  ;; ==========================================================================
+  ;; MessagePack primitives. All take (addr, end) and never read at or past
+  ;; end. $mp_header returns (kind, header bytes, count): count is the
+  ;; element count for arrays, the pair count for maps, the payload byte
+  ;; length for str/bin/ext, and the payload byte length for numbers (0 for
+  ;; fixints). K_INVALID on 0xc1 or truncation.
+  ;; ==========================================================================
+
+  (func $mp_header (param $addr i32) (param $end i32) (result i32 i32 i32)
+    (local $b i32)
+    (local $avail i32)
+    (local.set $avail (i32.sub (local.get $end) (local.get $addr)))
+    (if (i32.le_s (local.get $avail) (i32.const 0))
+      (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+    (local.set $b (i32.load8_u (local.get $addr)))
+    ;; positive fixint
+    (if (i32.lt_u (local.get $b) (i32.const 0x80))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 0))))
+    ;; fixmap
+    (if (i32.lt_u (local.get $b) (i32.const 0x90))
+      (then (return (global.get $K_MAP) (i32.const 1) (i32.and (local.get $b) (i32.const 0x0f)))))
+    ;; fixarray
+    (if (i32.lt_u (local.get $b) (i32.const 0xa0))
+      (then (return (global.get $K_ARRAY) (i32.const 1) (i32.and (local.get $b) (i32.const 0x0f)))))
+    ;; fixstr
+    (if (i32.lt_u (local.get $b) (i32.const 0xc0))
+      (then (return (global.get $K_STR) (i32.const 1) (i32.and (local.get $b) (i32.const 0x1f)))))
+    ;; negative fixint
+    (if (i32.ge_u (local.get $b) (i32.const 0xe0))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 0))))
+    (if (i32.eq (local.get $b) (i32.const 0xc0))
+      (then (return (global.get $K_NIL) (i32.const 1) (i32.const 0))))
+    (if (i32.eq (local.get $b) (i32.const 0xc2))
+      (then (return (global.get $K_FALSE) (i32.const 1) (i32.const 0))))
+    (if (i32.eq (local.get $b) (i32.const 0xc3))
+      (then (return (global.get $K_TRUE) (i32.const 1) (i32.const 0))))
+    ;; bin8/16/32
+    (if (i32.eq (local.get $b) (i32.const 0xc4))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 2))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_BIN) (i32.const 2) (i32.load8_u offset=1 (local.get $addr)))))
+    (if (i32.eq (local.get $b) (i32.const 0xc5))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 3))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_BIN) (i32.const 3) (call $load_be16 (i32.add (local.get $addr) (i32.const 1))))))
+    (if (i32.eq (local.get $b) (i32.const 0xc6))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 5))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_BIN) (i32.const 5) (call $load_be32 (i32.add (local.get $addr) (i32.const 1))))))
+    ;; ext8/16/32: payload length excludes the type byte; we fold it in.
+    (if (i32.eq (local.get $b) (i32.const 0xc7))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 3))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_EXT) (i32.const 3) (i32.load8_u offset=1 (local.get $addr)))))
+    (if (i32.eq (local.get $b) (i32.const 0xc8))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 4))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_EXT) (i32.const 4) (call $load_be16 (i32.add (local.get $addr) (i32.const 1))))))
+    (if (i32.eq (local.get $b) (i32.const 0xc9))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 6))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_EXT) (i32.const 6) (call $load_be32 (i32.add (local.get $addr) (i32.const 1))))))
+    (if (i32.eq (local.get $b) (i32.const 0xca))
+      (then (return (global.get $K_FLOAT) (i32.const 1) (i32.const 4))))
+    (if (i32.eq (local.get $b) (i32.const 0xcb))
+      (then (return (global.get $K_FLOAT) (i32.const 1) (i32.const 8))))
+    (if (i32.eq (local.get $b) (i32.const 0xcc))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 1))))
+    (if (i32.eq (local.get $b) (i32.const 0xcd))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 2))))
+    (if (i32.eq (local.get $b) (i32.const 0xce))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 4))))
+    (if (i32.eq (local.get $b) (i32.const 0xcf))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 8))))
+    (if (i32.eq (local.get $b) (i32.const 0xd0))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 1))))
+    (if (i32.eq (local.get $b) (i32.const 0xd1))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 2))))
+    (if (i32.eq (local.get $b) (i32.const 0xd2))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 4))))
+    (if (i32.eq (local.get $b) (i32.const 0xd3))
+      (then (return (global.get $K_INT) (i32.const 1) (i32.const 8))))
+    ;; fixext 1/2/4/8/16: type byte + payload
+    (if (i32.eq (local.get $b) (i32.const 0xd4))
+      (then (return (global.get $K_EXT) (i32.const 1) (i32.const 2))))
+    (if (i32.eq (local.get $b) (i32.const 0xd5))
+      (then (return (global.get $K_EXT) (i32.const 1) (i32.const 3))))
+    (if (i32.eq (local.get $b) (i32.const 0xd6))
+      (then (return (global.get $K_EXT) (i32.const 1) (i32.const 5))))
+    (if (i32.eq (local.get $b) (i32.const 0xd7))
+      (then (return (global.get $K_EXT) (i32.const 1) (i32.const 9))))
+    (if (i32.eq (local.get $b) (i32.const 0xd8))
+      (then (return (global.get $K_EXT) (i32.const 1) (i32.const 17))))
+    (if (i32.eq (local.get $b) (i32.const 0xd9))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 2))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_STR) (i32.const 2) (i32.load8_u offset=1 (local.get $addr)))))
+    (if (i32.eq (local.get $b) (i32.const 0xda))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 3))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_STR) (i32.const 3) (call $load_be16 (i32.add (local.get $addr) (i32.const 1))))))
+    (if (i32.eq (local.get $b) (i32.const 0xdb))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 5))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_STR) (i32.const 5) (call $load_be32 (i32.add (local.get $addr) (i32.const 1))))))
+    (if (i32.eq (local.get $b) (i32.const 0xdc))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 3))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_ARRAY) (i32.const 3) (call $load_be16 (i32.add (local.get $addr) (i32.const 1))))))
+    (if (i32.eq (local.get $b) (i32.const 0xdd))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 5))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_ARRAY) (i32.const 5) (call $load_be32 (i32.add (local.get $addr) (i32.const 1))))))
+    (if (i32.eq (local.get $b) (i32.const 0xde))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 3))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_MAP) (i32.const 3) (call $load_be16 (i32.add (local.get $addr) (i32.const 1))))))
+    (if (i32.eq (local.get $b) (i32.const 0xdf))
+      (then
+        (if (i32.lt_s (local.get $avail) (i32.const 5))
+          (then (return (global.get $K_INVALID) (i32.const 0) (i32.const 0))))
+        (return (global.get $K_MAP) (i32.const 5) (call $load_be32 (i32.add (local.get $addr) (i32.const 1))))))
+    ;; 0xc1
+    (global.get $K_INVALID) (i32.const 0) (i32.const 0))
+
+  (func $mp_kind (param $addr i32) (param $end i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32)
+    (call $mp_header (local.get $addr) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+    (local.get $kind))
+
+  ;; Byte offset of the first payload byte for str/bin/ext and the first
+  ;; element for arrays/maps.
+  (func $mp_payload (param $addr i32) (param $end i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32)
+    (call $mp_header (local.get $addr) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+    (i32.add (local.get $addr) (local.get $h)))
+
+  ;; Iterative skip: returns the address just past the value at addr, or
+  ;; -1 when the encoding is malformed or runs past end. Stackless — a
+  ;; single pending-item counter handles arbitrary nesting.
+  (func $mp_skip (param $addr i32) (param $end i32) (result i32)
+    (local $remaining i64)
+    (local $kind i32) (local $h i32) (local $n i32)
+    (local.set $remaining (i64.const 1))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i64.eqz (local.get $remaining)))
+        (local.set $remaining (i64.sub (local.get $remaining) (i64.const 1)))
+        (call $mp_header (local.get $addr) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+        (if (i32.eq (local.get $kind) (global.get $K_INVALID))
+          (then (return (i32.const -1))))
+        (if (i32.eq (local.get $kind) (global.get $K_ARRAY))
+          (then
+            (local.set $remaining (i64.add (local.get $remaining) (i64.extend_i32_u (local.get $n))))
+            (local.set $addr (i32.add (local.get $addr) (local.get $h))))
+          (else
+            (if (i32.eq (local.get $kind) (global.get $K_MAP))
+              (then
+                (local.set $remaining
+                  (i64.add (local.get $remaining)
+                           (i64.shl (i64.extend_i32_u (local.get $n)) (i64.const 1))))
+                (local.set $addr (i32.add (local.get $addr) (local.get $h))))
+              (else
+                ;; scalar / str / bin / ext: header + payload
+                (if (i64.gt_u
+                  (i64.add (i64.add (i64.extend_i32_u (local.get $addr)) (i64.extend_i32_u (local.get $h))) (i64.extend_i32_u (local.get $n)))
+                  (i64.extend_i32_u (local.get $end))) (then (return (i32.const -1))))
+                (local.set $addr (i32.add (i32.add (local.get $addr) (local.get $h)) (local.get $n)))))))
+        (if (i32.gt_u (local.get $addr) (local.get $end))
+          (then (return (i32.const -1))))
+        (br $loop)))
+    (local.get $addr))
+
+  ;; JSON type mask of the value at addr (0 for bin/ext/invalid).
+  (func $mp_type_mask (param $addr i32) (param $end i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32)
+    (call $mp_header (local.get $addr) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.eq (local.get $kind) (global.get $K_NIL)) (then (return (global.get $T_NULL))))
+    (if (i32.or (i32.eq (local.get $kind) (global.get $K_FALSE))
+                (i32.eq (local.get $kind) (global.get $K_TRUE)))
+      (then (return (global.get $T_BOOLEAN))))
+    (if (i32.eq (local.get $kind) (global.get $K_INT))
+      (then (return (i32.or (global.get $T_NUMBER) (global.get $T_INTEGER)))))
+    (if (i32.eq (local.get $kind) (global.get $K_FLOAT))
+      (then
+        (if (call $f64_is_integral (call $mp_f64 (local.get $addr)))
+          (then (return (i32.or (global.get $T_NUMBER) (global.get $T_INTEGER)))))
+        (return (global.get $T_NUMBER))))
+    (if (i32.eq (local.get $kind) (global.get $K_STR)) (then (return (global.get $T_STRING))))
+    (if (i32.eq (local.get $kind) (global.get $K_ARRAY)) (then (return (global.get $T_ARRAY))))
+    (if (i32.eq (local.get $kind) (global.get $K_MAP)) (then (return (global.get $T_OBJECT))))
+    (i32.const 0))
+
+  ;; ==========================================================================
+  ;; Numbers. Callers guarantee the value is K_INT or K_FLOAT.
+  ;; ==========================================================================
+
+  (func $f64_is_integral (param $v f64) (result i32)
+    (if (f64.ne (local.get $v) (local.get $v)) (then (return (i32.const 0))))
+    (if (f64.gt (f64.abs (local.get $v)) (f64.const 1.7976931348623157e308))
+      (then (return (i32.const 0))))
+    (f64.eq (f64.trunc (local.get $v)) (local.get $v)))
+
+  ;; Numeric kind: N_INT (i64), N_UINT (uint64 above i64 range), N_FLOAT.
+  (func $mp_num_kind (param $addr i32) (result i32)
+    (local $b i32)
+    (local.set $b (i32.load8_u (local.get $addr)))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 0xca)) (i32.eq (local.get $b) (i32.const 0xcb)))
+      (then (return (global.get $N_FLOAT))))
+    (if (i32.eq (local.get $b) (i32.const 0xcf))
+      (then
+        (if (i64.lt_s (call $load_be64 (i32.add (local.get $addr) (i32.const 1))) (i64.const 0))
+          (then (return (global.get $N_UINT))))))
+    (global.get $N_INT))
+
+  ;; Integer value as i64 (for N_UINT the bit pattern of the u64).
+  (func $mp_i64 (param $addr i32) (result i64)
+    (local $b i32)
+    (local.set $b (i32.load8_u (local.get $addr)))
+    (if (i32.lt_u (local.get $b) (i32.const 0x80))
+      (then (return (i64.extend_i32_u (local.get $b)))))
+    (if (i32.ge_u (local.get $b) (i32.const 0xe0))
+      (then (return (i64.extend_i32_s (i32.extend8_s (local.get $b))))))
+    (if (i32.eq (local.get $b) (i32.const 0xcc))
+      (then (return (i64.extend_i32_u (i32.load8_u offset=1 (local.get $addr))))))
+    (if (i32.eq (local.get $b) (i32.const 0xcd))
+      (then (return (i64.extend_i32_u (call $load_be16 (i32.add (local.get $addr) (i32.const 1)))))))
+    (if (i32.eq (local.get $b) (i32.const 0xce))
+      (then (return (i64.extend_i32_u (call $load_be32 (i32.add (local.get $addr) (i32.const 1)))))))
+    (if (i32.eq (local.get $b) (i32.const 0xcf))
+      (then (return (call $load_be64 (i32.add (local.get $addr) (i32.const 1))))))
+    (if (i32.eq (local.get $b) (i32.const 0xd0))
+      (then (return (i64.extend_i32_s (i32.extend8_s (i32.load8_u offset=1 (local.get $addr)))))))
+    (if (i32.eq (local.get $b) (i32.const 0xd1))
+      (then (return (i64.extend_i32_s (i32.extend16_s (call $load_be16 (i32.add (local.get $addr) (i32.const 1))))))))
+    (if (i32.eq (local.get $b) (i32.const 0xd2))
+      (then (return (i64.extend_i32_s (call $load_be32 (i32.add (local.get $addr) (i32.const 1)))))))
+    ;; 0xd3
+    (call $load_be64 (i32.add (local.get $addr) (i32.const 1))))
+
+  (func $mp_f64 (param $addr i32) (result f64)
+    (local $b i32)
+    (local.set $b (i32.load8_u (local.get $addr)))
+    (if (i32.eq (local.get $b) (i32.const 0xca))
+      (then (return (f64.promote_f32
+        (f32.reinterpret_i32 (call $load_be32 (i32.add (local.get $addr) (i32.const 1))))))))
+    (if (i32.eq (local.get $b) (i32.const 0xcb))
+      (then (return (f64.reinterpret_i64 (call $load_be64 (i32.add (local.get $addr) (i32.const 1)))))))
+    ;; integer formats: exact when representable, else nearest
+    (if (i32.eq (call $mp_num_kind (local.get $addr)) (global.get $N_UINT))
+      (then (return (f64.convert_i64_u (call $mp_i64 (local.get $addr))))))
+    (f64.convert_i64_s (call $mp_i64 (local.get $addr))))
+
+  ;; Compare an integer (i64, or u64 when $unsigned) against a float
+  ;; exactly. Returns -1/0/1, or 2 when the float is NaN.
+  (func $cmp_int_f64 (param $i i64) (param $unsigned i32) (param $f f64) (result i32)
+    (local $t f64)
+    (local $ti i64)
+    (if (f64.ne (local.get $f) (local.get $f)) (then (return (i32.const 2))))
+    ;; float beyond the integer range: sign decides
+    (if (f64.ge (local.get $f) (f64.const 18446744073709551616.0)) (then (return (i32.const -1))))
+    (if (f64.lt (local.get $f) (f64.const -9223372036854775808.0)) (then (return (i32.const 1))))
+    (if (i32.eqz (local.get $unsigned))
+      (then
+        (if (f64.ge (local.get $f) (f64.const 9223372036854775808.0)) (then (return (i32.const -1)))))
+      (else
+        (if (f64.lt (local.get $f) (f64.const 0.0)) (then (return (i32.const 1))))))
+    (local.set $t (f64.trunc (local.get $f)))
+    (if (local.get $unsigned)
+      (then (local.set $ti (i64.trunc_f64_u (local.get $t))))
+      (else (local.set $ti (i64.trunc_f64_s (local.get $t)))))
+    (if (local.get $unsigned)
+      (then
+        (if (i64.lt_u (local.get $i) (local.get $ti)) (then (return (i32.const -1))))
+        (if (i64.gt_u (local.get $i) (local.get $ti)) (then (return (i32.const 1)))))
+      (else
+        (if (i64.lt_s (local.get $i) (local.get $ti)) (then (return (i32.const -1))))
+        (if (i64.gt_s (local.get $i) (local.get $ti)) (then (return (i32.const 1))))))
+    ;; integer parts equal: the fraction decides
+    (if (f64.gt (local.get $f) (local.get $t)) (then (return (i32.const -1))))
+    (if (f64.lt (local.get $f) (local.get $t)) (then (return (i32.const 1))))
+    (i32.const 0))
+
+  ;; Exact numeric comparison of two msgpack numbers: -1/0/1, 2 if unordered.
+  (func $num_cmp (param $a i32) (param $b i32) (result i32)
+    (local $ka i32) (local $kb i32)
+    (local $ia i64) (local $ib i64)
+    (local $fa f64) (local $fb f64)
+    (local $r i32)
+    (local.set $ka (call $mp_num_kind (local.get $a)))
+    (local.set $kb (call $mp_num_kind (local.get $b)))
+    (if (i32.and (i32.ne (local.get $ka) (global.get $N_FLOAT))
+                 (i32.ne (local.get $kb) (global.get $N_FLOAT)))
+      (then
+        (local.set $ia (call $mp_i64 (local.get $a)))
+        (local.set $ib (call $mp_i64 (local.get $b)))
+        (if (i32.and (i32.eq (local.get $ka) (global.get $N_INT))
+                     (i32.eq (local.get $kb) (global.get $N_INT)))
+          (then
+            (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))
+            (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))
+            (return (i32.const 0))))
+        (if (i32.and (i32.eq (local.get $ka) (global.get $N_UINT))
+                     (i32.eq (local.get $kb) (global.get $N_UINT)))
+          (then
+            (if (i64.lt_u (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))
+            (if (i64.gt_u (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))
+            (return (i32.const 0))))
+        ;; one UINT (above i64 range) against one INT
+        (if (i32.eq (local.get $ka) (global.get $N_UINT))
+          (then (return (i32.const 1)))
+          (else (return (i32.const -1))))))
+    (if (i32.eq (local.get $ka) (global.get $N_FLOAT))
+      (then
+        (local.set $fa (call $mp_f64 (local.get $a)))
+        (if (i32.eq (local.get $kb) (global.get $N_FLOAT))
+          (then
+            (local.set $fb (call $mp_f64 (local.get $b)))
+            (if (i32.or (f64.ne (local.get $fa) (local.get $fa)) (f64.ne (local.get $fb) (local.get $fb)))
+              (then (return (i32.const 2))))
+            (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))
+            (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))
+            (return (i32.const 0))))
+        ;; a float, b integer: negate the int-vs-float result
+        (local.set $r (call $cmp_int_f64 (call $mp_i64 (local.get $b))
+                                         (i32.eq (local.get $kb) (global.get $N_UINT))
+                                         (local.get $fa)))
+        (if (i32.eq (local.get $r) (i32.const 2)) (then (return (i32.const 2))))
+        (return (i32.sub (i32.const 0) (local.get $r)))))
+    ;; a integer, b float
+    (call $cmp_int_f64 (call $mp_i64 (local.get $a))
+                       (i32.eq (local.get $ka) (global.get $N_UINT))
+                       (call $mp_f64 (local.get $b))))
+
+  ;; value is a multiple of divisor (both msgpack numbers).
+  (func $num_multiple_of (param $value i32) (param $divisor i32) (result i32)
+    (local $kv i32) (local $kd i32)
+    (local $iv i64) (local $id i64)
+    (local $q f64) (local $r f64) (local $d f64)
+    (local.set $kv (call $mp_num_kind (local.get $value)))
+    (local.set $kd (call $mp_num_kind (local.get $divisor)))
+    (if (i32.and (i32.eq (local.get $kv) (global.get $N_INT))
+                 (i32.eq (local.get $kd) (global.get $N_INT)))
+      (then
+        (local.set $iv (call $mp_i64 (local.get $value)))
+        (local.set $id (call $mp_i64 (local.get $divisor)))
+        (if (i64.eqz (local.get $id)) (then (return (i32.const 0))))
+        (return (i64.eqz (i64.rem_s (local.get $iv) (local.get $id))))))
+    (if (i32.and (i32.ne (local.get $kv) (global.get $N_FLOAT))
+                 (i32.ne (local.get $kd) (global.get $N_FLOAT)))
+      (then
+        ;; unsigned range involved: both non-negative, use unsigned remainder
+        (local.set $iv (call $mp_i64 (local.get $value)))
+        (local.set $id (call $mp_i64 (local.get $divisor)))
+        (if (i64.eqz (local.get $id)) (then (return (i32.const 0))))
+        (if (i32.and (i32.eq (local.get $kv) (global.get $N_INT)) (i64.lt_s (local.get $iv) (i64.const 0)))
+          (then
+            ;; negative value against a divisor above the i64 range: only 0 qualifies
+            (return (i32.const 0))))
+        (return (i64.eqz (i64.rem_u (local.get $iv) (local.get $id))))))
+    (local.set $d (call $mp_f64 (local.get $divisor)))
+    (if (f64.eq (local.get $d) (f64.const 0.0)) (then (return (i32.const 0))))
+    (local.set $q (f64.div (call $mp_f64 (local.get $value)) (local.get $d)))
+    (if (f64.ne (local.get $q) (local.get $q)) (then (return (i32.const 0))))
+    (if (f64.gt (f64.abs (local.get $q)) (f64.const 1.7976931348623157e308))
+      (then
+        ;; quotient overflowed: decide by an exact remainder instead
+        (return (f64.eq (call $fmod_exact (f64.abs (call $mp_f64 (local.get $value))) (f64.abs (local.get $d))) (f64.const 0.0)))))
+    (local.set $r (f64.abs (f64.sub (local.get $q) (f64.nearest (local.get $q)))))
+    (f64.le (local.get $r)
+            (f64.mul (f64.const 1e-9) (f64.max (f64.const 1.0) (f64.abs (local.get $q))))))
+
+  ;; Exact floating remainder for finite x, y > 0: repeatedly subtract y
+  ;; scaled by a power of two no larger than x (Sterbenz makes every
+  ;; subtraction exact). Iterations are bounded by the exponent gap.
+  (func $fmod_exact (param $x f64) (param $y f64) (result f64)
+    (local $d f64) (local $ex i64) (local $ey i64) (local $bits i64) (local $guard i32)
+    (if (f64.eq (local.get $y) (f64.const 0.0)) (then (return (f64.const nan))))
+    ;; Non-finite operands violate the scaling bound: infinity doubles to
+    ;; itself, so the subnormal loop could never reach its outer guard.
+    (if (i32.eqz (i32.and
+          (f64.le (f64.abs (local.get $x)) (f64.const 1.7976931348623157e308))
+          (f64.le (f64.abs (local.get $y)) (f64.const 1.7976931348623157e308))))
+      (then (return (f64.const nan))))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (f64.lt (local.get $x) (local.get $y)))
+        (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
+        (if (i32.gt_u (local.get $guard) (i32.const 4200)) (then (return (f64.const nan))))
+        ;; d = y * 2^(exp(x) - exp(y)), reduced once if it exceeds x
+        (local.set $ex (i64.and (i64.shr_u (i64.reinterpret_f64 (local.get $x)) (i64.const 52)) (i64.const 0x7ff)))
+        (local.set $ey (i64.and (i64.shr_u (i64.reinterpret_f64 (local.get $y)) (i64.const 52)) (i64.const 0x7ff)))
+        (if (i64.eqz (local.get $ey))
+          (then
+            ;; subnormal divisor: scale up by repeated doubling instead
+            (local.set $d (local.get $y))
+            (block $sd (loop $sl
+              (call $work_add (i32.const 1))
+              (br_if $sd (f64.gt (f64.mul (local.get $d) (f64.const 2.0)) (local.get $x)))
+              (local.set $d (f64.mul (local.get $d) (f64.const 2.0)))
+              (br $sl))))
+          (else
+            (local.set $bits (i64.add (i64.reinterpret_f64 (local.get $y))
+                                      (i64.shl (i64.sub (local.get $ex) (local.get $ey)) (i64.const 52))))
+            (local.set $d (f64.reinterpret_i64 (local.get $bits)))
+            (if (f64.gt (local.get $d) (local.get $x)) (then (local.set $d (f64.mul (local.get $d) (f64.const 0.5)))))))
+        (local.set $x (f64.sub (local.get $x) (local.get $d)))
+        (br $loop)))
+    (local.get $x))
+
+  ;; ==========================================================================
+  ;; Structural hash and equality (key-order independent, numeric across
+  ;; integer/float). Recursion is bounded by HASH_DEPTH: beyond it hashes
+  ;; collapse to a constant (forcing a compare) and compares report -1.
+  ;; Each recursive value examination and container-loop visit is a work
+  ;; unit. Byte comparisons, hashing and structural skips charge at their
+  ;; own source; callers must not also estimate those from payload length.
+  ;; ==========================================================================
+
+  (func $mp_hash_number (param $addr i32) (result i32)
+    (local $k i32)
+    (local $f f64)
+    (local.set $k (call $mp_num_kind (local.get $addr)))
+    (if (i32.ne (local.get $k) (global.get $N_FLOAT))
+      (then (return (call $hash64 (call $mp_i64 (local.get $addr))))))
+    (local.set $f (call $mp_f64 (local.get $addr)))
+    (if (call $f64_is_integral (local.get $f))
+      (then
+        (if (i32.and (f64.ge (local.get $f) (f64.const -9223372036854775808.0))
+                     (f64.lt (local.get $f) (f64.const 9223372036854775808.0)))
+          (then (return (call $hash64 (i64.trunc_f64_s (local.get $f))))))
+        (if (i32.and (f64.ge (local.get $f) (f64.const 0.0))
+                     (f64.lt (local.get $f) (f64.const 18446744073709551616.0)))
+          (then (return (call $hash64 (i64.trunc_f64_u (local.get $f))))))))
+    (i32.xor (call $hash64 (i64.reinterpret_f64 (local.get $f))) (i32.const 0x5bd1e995)))
+
+  (func $mp_hash (param $addr i32) (param $end i32) (param $depth i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32)
+    (local $acc i32) (local $cursor i32) (local $i i32)
+    (local $kh i32) (local $next i32)
+    (call $work_add (i32.const 1))
+    (if (i32.gt_u (local.get $depth) (global.get $HASH_DEPTH))
+      (then (return (i32.const 0x7fffffff))))
+    (call $mp_header (local.get $addr) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.eq (local.get $kind) (global.get $K_NIL)) (then (return (i32.const 0x100))))
+    (if (i32.eq (local.get $kind) (global.get $K_FALSE)) (then (return (i32.const 0x200))))
+    (if (i32.eq (local.get $kind) (global.get $K_TRUE)) (then (return (i32.const 0x300))))
+    (if (i32.or (i32.eq (local.get $kind) (global.get $K_INT)) (i32.eq (local.get $kind) (global.get $K_FLOAT)))
+      (then (return (call $mp_hash_number (local.get $addr)))))
+    (if (i32.eq (local.get $kind) (global.get $K_STR))
+      (then (return (i32.xor (call $fnv1a (i32.add (local.get $addr) (local.get $h)) (local.get $n))
+                             (i32.const 0x500)))))
+    (if (i32.or (i32.eq (local.get $kind) (global.get $K_BIN)) (i32.eq (local.get $kind) (global.get $K_EXT)))
+      (then (return (i32.xor (call $fnv1a (i32.add (local.get $addr) (local.get $h)) (local.get $n))
+                             (i32.const 0x600)))))
+    (local.set $cursor (i32.add (local.get $addr) (local.get $h)))
+    (if (i32.eq (local.get $kind) (global.get $K_ARRAY))
+      (then
+        (local.set $acc (i32.const 0x700))
+        (local.set $i (i32.const 0))
+        (block $done
+          (loop $loop
+            (call $work_add (i32.const 1))
+            (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+            (local.set $acc (call $mix32 (local.get $acc)
+              (call $mp_hash (local.get $cursor) (local.get $end) (i32.add (local.get $depth) (i32.const 1)))))
+            (local.set $next (call $mp_skip (local.get $cursor) (local.get $end)))
+            (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (i32.const 0))))
+            (local.set $cursor (local.get $next))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $loop)))
+        (return (local.get $acc))))
+    (if (i32.eq (local.get $kind) (global.get $K_MAP))
+      (then
+        (local.set $acc (i32.const 0x800))
+        (local.set $i (i32.const 0))
+        (block $done
+          (loop $loop
+            (call $work_add (i32.const 1))
+            (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+            (local.set $kh (call $mp_hash (local.get $cursor) (local.get $end) (i32.add (local.get $depth) (i32.const 1))))
+            (local.set $next (call $mp_skip (local.get $cursor) (local.get $end)))
+            (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (i32.const 0))))
+            (local.set $cursor (local.get $next))
+            ;; commutative combine: order of pairs must not matter
+            (local.set $acc (i32.add (local.get $acc)
+              (call $mix32 (local.get $kh)
+                (call $mp_hash (local.get $cursor) (local.get $end) (i32.add (local.get $depth) (i32.const 1))))))
+            (local.set $next (call $mp_skip (local.get $cursor) (local.get $end)))
+            (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (i32.const 0))))
+            (local.set $cursor (local.get $next))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $loop)))
+        (return (local.get $acc))))
+    (i32.const 0))
+
+  ;; Find the value for a string key in a map; returns the value address
+  ;; or -1 (not found / malformed).
+  (func $mp_map_find (param $map i32) (param $end i32) (param $key i32) (param $key_len i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32)
+    (local $cursor i32) (local $i i32) (local $next i32)
+    (local $kk i32) (local $kh i32) (local $kn i32)
+    (call $mp_header (local.get $map) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_MAP)) (then (return (i32.const -1))))
+    (local.set $cursor (i32.add (local.get $map) (local.get $h)))
+    (local.set $i (i32.const 0))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+        (call $mp_header (local.get $cursor) (local.get $end)) (local.set $kn) (local.set $kh) (local.set $kk)
+        (if (i32.eq (local.get $kk) (global.get $K_INVALID)) (then (return (i32.const -1))))
+        (local.set $next (call $mp_skip (local.get $cursor) (local.get $end)))
+        (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (i32.const -1))))
+        (if (i32.and (i32.eq (local.get $kk) (global.get $K_STR)) (i32.eq (local.get $kn) (local.get $key_len)))
+          (then
+            (if (call $bytes_equal (i32.add (local.get $cursor) (local.get $kh)) (local.get $key) (local.get $key_len))
+              (then (return (local.get $next))))))
+        (local.set $cursor (call $mp_skip (local.get $next) (local.get $end)))
+        (if (i32.lt_s (local.get $cursor) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (i32.const -1))
+  ;; Lookup charges actual pair visits, including misses; recursive map
+  ;; equality therefore accounts for its repeated searches, not just size.
+
+  ;; Structural equality: 1 equal, 0 different, -1 depth limit / malformed.
+  (func $mp_equal (param $a i32) (param $a_end i32) (param $b i32) (param $b_end i32) (param $depth i32) (result i32)
+    (local $ka i32) (local $ha i32) (local $na i32)
+    (local $kb i32) (local $hb i32) (local $nb i32)
+    (local $ca i32) (local $cb i32) (local $i i32) (local $r i32)
+    (local $kk i32) (local $kh i32) (local $kn i32) (local $found i32)
+    (call $work_add (i32.const 1))
+    (if (i32.gt_u (local.get $depth) (global.get $HASH_DEPTH)) (then (return (i32.const -1))))
+    (call $mp_header (local.get $a) (local.get $a_end)) (local.set $na) (local.set $ha) (local.set $ka)
+    (call $mp_header (local.get $b) (local.get $b_end)) (local.set $nb) (local.set $hb) (local.set $kb)
+    (if (i32.or (i32.eq (local.get $ka) (global.get $K_INVALID)) (i32.eq (local.get $kb) (global.get $K_INVALID)))
+      (then (return (i32.const -1))))
+    ;; numbers compare numerically across int/float
+    (if (i32.and
+          (i32.or (i32.eq (local.get $ka) (global.get $K_INT)) (i32.eq (local.get $ka) (global.get $K_FLOAT)))
+          (i32.or (i32.eq (local.get $kb) (global.get $K_INT)) (i32.eq (local.get $kb) (global.get $K_FLOAT))))
+      (then (return (i32.eqz (call $num_cmp (local.get $a) (local.get $b))))))
+    (if (i32.ne (local.get $ka) (local.get $kb)) (then (return (i32.const 0))))
+    (if (i32.le_u (local.get $ka) (global.get $K_TRUE)) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $ka) (global.get $K_STR))
+                (i32.or (i32.eq (local.get $ka) (global.get $K_BIN)) (i32.eq (local.get $ka) (global.get $K_EXT))))
+      (then
+        (if (i32.ne (local.get $na) (local.get $nb)) (then (return (i32.const 0))))
+        (return (call $bytes_equal (i32.add (local.get $a) (local.get $ha))
+                                   (i32.add (local.get $b) (local.get $hb)) (local.get $na)))))
+    (if (i32.ne (local.get $na) (local.get $nb)) (then (return (i32.const 0))))
+    (local.set $ca (i32.add (local.get $a) (local.get $ha)))
+    (local.set $cb (i32.add (local.get $b) (local.get $hb)))
+    (if (i32.eq (local.get $ka) (global.get $K_ARRAY))
+      (then
+        (local.set $i (i32.const 0))
+        (block $done
+          (loop $loop
+            (call $work_add (i32.const 1))
+            (br_if $done (i32.ge_u (local.get $i) (local.get $na)))
+            (local.set $r (call $mp_equal (local.get $ca) (local.get $a_end) (local.get $cb) (local.get $b_end)
+                                          (i32.add (local.get $depth) (i32.const 1))))
+            (if (i32.ne (local.get $r) (i32.const 1)) (then (return (local.get $r))))
+            (local.set $ca (call $mp_skip (local.get $ca) (local.get $a_end)))
+            (local.set $cb (call $mp_skip (local.get $cb) (local.get $b_end)))
+            (if (i32.or (i32.lt_s (local.get $ca) (i32.const 0)) (i32.lt_s (local.get $cb) (i32.const 0)))
+              (then (return (i32.const -1))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $loop)))
+        (return (i32.const 1))))
+    ;; map: every key of a must be found in b with an equal value
+    (local.set $i (i32.const 0))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (local.get $na)))
+        (call $mp_header (local.get $ca) (local.get $a_end)) (local.set $kn) (local.set $kh) (local.set $kk)
+        (if (i32.ne (local.get $kk) (global.get $K_STR)) (then (return (i32.const -1))))
+        (local.set $found (call $mp_map_find (local.get $b) (local.get $b_end)
+                                             (i32.add (local.get $ca) (local.get $kh)) (local.get $kn)))
+        (if (i32.lt_s (local.get $found) (i32.const 0)) (then (return (i32.const 0))))
+        (local.set $ca (call $mp_skip (local.get $ca) (local.get $a_end)))
+        (if (i32.lt_s (local.get $ca) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $r (call $mp_equal (local.get $ca) (local.get $a_end) (local.get $found) (local.get $b_end)
+                                      (i32.add (local.get $depth) (i32.const 1))))
+        (if (i32.ne (local.get $r) (i32.const 1)) (then (return (local.get $r))))
+        (local.set $ca (call $mp_skip (local.get $ca) (local.get $a_end)))
+        (if (i32.lt_s (local.get $ca) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (i32.const 1))
+
+  ;; ==========================================================================
+  ;; UTF-8: scalar count with full validation (-1 on invalid).
+  ;; Charge each scalar/continuation loop visit, including failed reads and
+  ;; termination checks. An invalid prefix never charges the unvisited suffix.
+  ;; ==========================================================================
+
+  (func $utf8_count (export "utf8_count") (param $addr i32) (param $len i32) (result i32)
+    (local $end i32) (local $b i32) (local $count i32) (local $cp i32) (local $need i32) (local $min i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    (local.set $count (i32.const 0))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $addr) (local.get $end)))
+        (local.set $b (i32.load8_u (local.get $addr)))
+        (local.set $addr (i32.add (local.get $addr) (i32.const 1)))
+        (local.set $count (i32.add (local.get $count) (i32.const 1)))
+        (if (i32.lt_u (local.get $b) (i32.const 0x80)) (then (br $loop)))
+        (if (i32.lt_u (local.get $b) (i32.const 0xc2)) (then (return (i32.const -1))))
+        (if (i32.lt_u (local.get $b) (i32.const 0xe0))
+          (then (local.set $need (i32.const 1)) (local.set $cp (i32.and (local.get $b) (i32.const 0x1f))) (local.set $min (i32.const 0x80)))
+          (else
+            (if (i32.lt_u (local.get $b) (i32.const 0xf0))
+              (then (local.set $need (i32.const 2)) (local.set $cp (i32.and (local.get $b) (i32.const 0x0f))) (local.set $min (i32.const 0x800)))
+              (else
+                (if (i32.lt_u (local.get $b) (i32.const 0xf5))
+                  (then (local.set $need (i32.const 3)) (local.set $cp (i32.and (local.get $b) (i32.const 0x07))) (local.set $min (i32.const 0x10000)))
+                  (else (return (i32.const -1))))))))
+        (block $cont
+          (loop $cl
+            (call $work_add (i32.const 1))
+            (br_if $cont (i32.eqz (local.get $need)))
+            (if (i32.ge_u (local.get $addr) (local.get $end)) (then (return (i32.const -1))))
+            (local.set $b (i32.load8_u (local.get $addr)))
+            (if (i32.ne (i32.and (local.get $b) (i32.const 0xc0)) (i32.const 0x80)) (then (return (i32.const -1))))
+            (local.set $cp (i32.or (i32.shl (local.get $cp) (i32.const 6)) (i32.and (local.get $b) (i32.const 0x3f))))
+            (local.set $addr (i32.add (local.get $addr) (i32.const 1)))
+            (local.set $need (i32.sub (local.get $need) (i32.const 1)))
+            (br $cl)))
+        (if (i32.lt_u (local.get $cp) (local.get $min)) (then (return (i32.const -1))))
+        (if (i32.gt_u (local.get $cp) (i32.const 0x10ffff)) (then (return (i32.const -1))))
+        (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0xd800)) (i32.le_u (local.get $cp) (i32.const 0xdfff)))
+          (then (return (i32.const -1))))
+        (br $loop)))
+    (local.get $count))
+
+  ;; Fuel charge for a bulk byte operation: ceil(bytes / 64).
+  (func $bulk_charge (param $bytes i32) (result i32)
+    (i32.add (i32.shr_u (local.get $bytes) (i32.const 6))
+      (i32.ne (i32.and (local.get $bytes) (i32.const 63)) (i32.const 0))))
+
+  ;; ==========================================================================
+  ;; Program layout (SCHEMA_PROGRAM). All offsets are program-relative.
+  ;; ==========================================================================
+
+  (global $PROGRAM_MAGIC i32 (i32.const 0x48435353))
+  (global $PROGRAM_VERSION i32 (i32.const 2))
+  (global $PROGRAM_HEADER_SIZE i32 (i32.const 80))
+  (global $NODE_SIZE i32 (i32.const 16))
+  (global $INSTRUCTION_SIZE i32 (i32.const 16))
+  (global $TRUE_NODE i32 (i32.const 0))
+  (global $FALSE_NODE i32 (i32.const 1))
+
+  (global $PH_MAGIC i32 (i32.const 0))
+  (global $PH_VERSION i32 (i32.const 4))
+  (global $PH_TOTAL_BYTES i32 (i32.const 8))
+  (global $PH_ROOT_NODE i32 (i32.const 12))
+  (global $PH_NODE_COUNT i32 (i32.const 16))
+  (global $PH_NODE_TABLE_OFFSET i32 (i32.const 20))
+  (global $PH_CODE_OFFSET i32 (i32.const 24))
+  (global $PH_CODE_BYTES i32 (i32.const 28))
+  (global $PH_POOL_OFFSET i32 (i32.const 32))
+  (global $PH_POOL_BYTES i32 (i32.const 36))
+  (global $PH_RESOURCE_TABLE_OFFSET i32 (i32.const 40))
+  (global $PH_RESOURCE_COUNT i32 (i32.const 44))
+  (global $PH_MAX_STATIC_DEPTH i32 (i32.const 48))
+  (global $PH_MAX_REGEX_CONTINUATION i32 (i32.const 52))
+  (global $PH_FLAGS i32 (i32.const 56))
+  (global $PH_SCHEMA_BYTES i32 (i32.const 60))
+  (global $PH_ROUTE_TABLE i32 (i32.const 64))
+  (global $PH_ROUTE_COUNT i32 (i32.const 68))
+  (global $PH_GATE_TABLE i32 (i32.const 72))
+  (global $PH_GATE_CAPACITY i32 (i32.const 76))
+
+  (global $NODE_CODE_OFFSET i32 (i32.const 0))
+  (global $NODE_SCHEMA_OFFSET i32 (i32.const 4))
+  (global $NODE_POINTER_STRING i32 (i32.const 8))
+  (global $NODE_FLAGS i32 (i32.const 12))
+
+  ;; Opcodes (SCHEMA_OPCODE).
+  (global $OP_END i32 (i32.const 0))
+  (global $OP_FAIL i32 (i32.const 1))
+  (global $OP_TYPE i32 (i32.const 2))
+  (global $OP_CONST i32 (i32.const 3))
+  (global $OP_ENUM i32 (i32.const 4))
+  (global $OP_MINIMUM i32 (i32.const 5))
+  (global $OP_MAXIMUM i32 (i32.const 6))
+  (global $OP_EXCLUSIVE_MINIMUM i32 (i32.const 7))
+  (global $OP_EXCLUSIVE_MAXIMUM i32 (i32.const 8))
+  (global $OP_MULTIPLE_OF i32 (i32.const 9))
+  (global $OP_MIN_LENGTH i32 (i32.const 10))
+  (global $OP_MAX_LENGTH i32 (i32.const 11))
+  (global $OP_MIN_ITEMS i32 (i32.const 12))
+  (global $OP_MAX_ITEMS i32 (i32.const 13))
+  (global $OP_MIN_PROPERTIES i32 (i32.const 14))
+  (global $OP_MAX_PROPERTIES i32 (i32.const 15))
+  (global $OP_OBJECT_PASS i32 (i32.const 16))
+  (global $OP_ARRAY_PASS i32 (i32.const 17))
+  (global $OP_ALL_OF i32 (i32.const 18))
+  (global $OP_ANY_OF i32 (i32.const 19))
+  (global $OP_ONE_OF i32 (i32.const 20))
+  (global $OP_NOT i32 (i32.const 21))
+  (global $OP_IF i32 (i32.const 22))
+  (global $OP_REF i32 (i32.const 23))
+  (global $OP_PATTERN i32 (i32.const 24))
+  (global $OP_FORMAT i32 (i32.const 25))
+  (global $OP_DYNAMIC_REF i32 (i32.const 26))
+  (global $OP_UNEVALUATED_PROPERTIES i32 (i32.const 27))
+  (global $OP_UNEVALUATED_ITEMS i32 (i32.const 28))
+  (global $OP_LAST i32 (i32.const 28))
+
+  ;; Pool object table / entry / dependency / array table (SCHEMA_POOL).
+  (global $OT_ENTRY_COUNT i32 (i32.const 0))
+  (global $OT_CAPACITY i32 (i32.const 4))
+  (global $OT_ENTRIES_OFFSET i32 (i32.const 8))
+  (global $OT_BIT_COUNT i32 (i32.const 12))
+  (global $OT_REQUIRED_LIST i32 (i32.const 16))
+  (global $OT_ADDITIONAL_NODE i32 (i32.const 20))
+  (global $OT_PROPERTY_NAMES_NODE i32 (i32.const 24))
+  (global $OT_PATTERN_COUNT i32 (i32.const 28))
+  (global $OT_PATTERN_LIST i32 (i32.const 32))
+  (global $OT_FLAGS i32 (i32.const 36))
+  (global $OT_SIZE i32 (i32.const 40))
+  (global $OE_HASH i32 (i32.const 0))
+  (global $OE_KEY i32 (i32.const 4))
+  (global $OE_CHILD_NODE i32 (i32.const 8))
+  (global $OE_SEEN_BIT i32 (i32.const 12))
+  (global $OE_DEPENDENCY i32 (i32.const 16))
+  (global $OE_SIZE i32 (i32.const 20))
+  (global $DEP_REQUIRED_COUNT i32 (i32.const 0))
+  (global $DEP_SCHEMA_NODE i32 (i32.const 4))
+  (global $DEP_ENTRIES i32 (i32.const 8))
+  (global $AT_PREFIX_COUNT i32 (i32.const 0))
+  (global $AT_PREFIX_LIST i32 (i32.const 4))
+  (global $AT_ITEMS_NODE i32 (i32.const 8))
+  (global $AT_CONTAINS_NODE i32 (i32.const 12))
+  (global $AT_MIN_CONTAINS i32 (i32.const 16))
+  (global $AT_MAX_CONTAINS i32 (i32.const 20))
+  (global $AT_UNIQUE i32 (i32.const 24))
+  (global $AT_FLAGS i32 (i32.const 28))
+  (global $AT_SIZE i32 (i32.const 32))
+
+  ;; Keyword codes used for error records (KEYWORD_NAMES index).
+  (global $KW_REF i32 (i32.const 1))
+  (global $KW_TYPE i32 (i32.const 14))
+  (global $KW_CONST i32 (i32.const 15))
+  (global $KW_ENUM i32 (i32.const 16))
+  (global $KW_MULTIPLE_OF i32 (i32.const 17))
+  (global $KW_MAXIMUM i32 (i32.const 18))
+  (global $KW_EXCLUSIVE_MAXIMUM i32 (i32.const 19))
+  (global $KW_MINIMUM i32 (i32.const 20))
+  (global $KW_EXCLUSIVE_MINIMUM i32 (i32.const 21))
+  (global $KW_MAX_LENGTH i32 (i32.const 22))
+  (global $KW_MIN_LENGTH i32 (i32.const 23))
+  (global $KW_PATTERN i32 (i32.const 24))
+  (global $KW_FORMAT i32 (i32.const 25))
+  (global $KW_MAX_ITEMS i32 (i32.const 26))
+  (global $KW_MIN_ITEMS i32 (i32.const 27))
+  (global $KW_UNIQUE_ITEMS i32 (i32.const 28))
+  (global $KW_MAX_CONTAINS i32 (i32.const 29))
+  (global $KW_MIN_CONTAINS i32 (i32.const 30))
+  (global $KW_MAX_PROPERTIES i32 (i32.const 31))
+  (global $KW_MIN_PROPERTIES i32 (i32.const 32))
+  (global $KW_REQUIRED i32 (i32.const 33))
+  (global $KW_DEPENDENT_REQUIRED i32 (i32.const 34))
+  (global $KW_ALL_OF i32 (i32.const 35))
+  (global $KW_ANY_OF i32 (i32.const 36))
+  (global $KW_ONE_OF i32 (i32.const 37))
+  (global $KW_NOT i32 (i32.const 38))
+  (global $KW_IF i32 (i32.const 39))
+  (global $KW_THEN i32 (i32.const 40))
+  (global $KW_ELSE i32 (i32.const 41))
+  (global $KW_PROPERTIES i32 (i32.const 42))
+  (global $KW_PATTERN_PROPERTIES i32 (i32.const 43))
+  (global $KW_ADDITIONAL_PROPERTIES i32 (i32.const 44))
+  (global $KW_PROPERTY_NAMES i32 (i32.const 45))
+  (global $KW_DEPENDENT_SCHEMAS i32 (i32.const 46))
+  (global $KW_DEPENDENCIES i32 (i32.const 47))
+  (global $KW_PREFIX_ITEMS i32 (i32.const 48))
+  (global $KW_ITEMS i32 (i32.const 49))
+  (global $KW_ADDITIONAL_ITEMS i32 (i32.const 50))
+  (global $KW_CONTAINS i32 (i32.const 51))
+  (global $KW_FALSE i32 (i32.const 64))
+
+  ;; Error param kinds (SCHEMA_CONTINUATION.PARAM_KIND).
+  (global $PK_NONE i32 (i32.const 0))
+  (global $PK_TYPE_MASK i32 (i32.const 1))
+  (global $PK_POOL_VALUE i32 (i32.const 2))
+  (global $PK_LIMIT i32 (i32.const 3))
+  (global $PK_POOL_STRING i32 (i32.const 4))
+  (global $PK_TEXT i32 (i32.const 5))
+  (global $PK_INDICES i32 (i32.const 6))
+  (global $PK_COUNT i32 (i32.const 7))
+  (global $PK_DEPENDENCY i32 (i32.const 8))
+
+  (func $ph (param $program i32) (param $field i32) (result i32)
+    (i32.load (i32.add (local.get $program) (local.get $field))))
+
+  (func $node_addr (param $program i32) (param $node i32) (result i32)
+    (i32.add (i32.add (local.get $program) (call $ph (local.get $program) (global.get $PH_NODE_TABLE_OFFSET)))
+             (i32.mul (local.get $node) (global.get $NODE_SIZE))))
+
+  (func $node_code (param $program i32) (param $node i32) (result i32)
+    (i32.load (call $node_addr (local.get $program) (local.get $node))))
+
+  (func $node_pointer_string (export "node_pointer_string") (param $program i32) (param $node i32) (result i32)
+    (i32.load offset=8 (call $node_addr (local.get $program) (local.get $node))))
+
+  ;; Program facts for hosts.
+  (func $program_total_bytes (export "program_total_bytes") (param $program i32) (result i32)
+    (call $ph (local.get $program) (global.get $PH_TOTAL_BYTES)))
+  (func $program_node_count (export "program_node_count") (param $program i32) (result i32)
+    (call $ph (local.get $program) (global.get $PH_NODE_COUNT)))
+  (func $program_root_node (export "program_root_node") (param $program i32) (result i32)
+    (call $ph (local.get $program) (global.get $PH_ROOT_NODE)))
+
+  ;; Validate every offset and every node's code run. Never reads outside
+  ;; [program, program + capacity).
+  (func $validate_program (export "validate_program") (param $program i32) (param $capacity i32) (result i32)
+    (local $total i32) (local $nodes i32) (local $table i32) (local $code i32) (local $code_bytes i32)
+    (local $pool i32) (local $pool_bytes i32) (local $i i32) (local $entry i32) (local $pc i32) (local $op i32)
+    (local $a i32) (local $b i32) (local $c i32) (local $ptr i32)
+    (call $work_add (i32.const 1))
+    (if (i32.eqz (call $direct_span (local.get $program) (local.get $capacity) (i32.const 0)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.lt_u (local.get $capacity) (global.get $PROGRAM_HEADER_SIZE))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.ne (call $ph (local.get $program) (global.get $PH_MAGIC)) (global.get $PROGRAM_MAGIC))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.ne (call $ph (local.get $program) (global.get $PH_VERSION)) (global.get $PROGRAM_VERSION))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (local.set $total (call $ph (local.get $program) (global.get $PH_TOTAL_BYTES)))
+    (if (i32.or (i32.gt_u (local.get $total) (local.get $capacity))
+                (i32.lt_u (local.get $total) (global.get $PROGRAM_HEADER_SIZE)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (local.set $nodes (call $ph (local.get $program) (global.get $PH_NODE_COUNT)))
+    (local.set $table (call $ph (local.get $program) (global.get $PH_NODE_TABLE_OFFSET)))
+    (local.set $code (call $ph (local.get $program) (global.get $PH_CODE_OFFSET)))
+    (local.set $code_bytes (call $ph (local.get $program) (global.get $PH_CODE_BYTES)))
+    (local.set $pool (call $ph (local.get $program) (global.get $PH_POOL_OFFSET)))
+    (local.set $pool_bytes (call $ph (local.get $program) (global.get $PH_POOL_BYTES)))
+    ;; Establish non-wrapping region facts before any nested offset is read.
+    (if (i32.or
+      (i64.ne (i64.extend_i32_u (local.get $pool))
+        (i64.add (i64.extend_i32_u (local.get $code)) (i64.extend_i32_u (local.get $code_bytes))))
+      (i64.ne (i64.extend_i32_u (local.get $total))
+        (i64.add (i64.extend_i32_u (local.get $pool)) (i64.extend_i32_u (local.get $pool_bytes)))))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.or (i32.gt_u (local.get $code) (local.get $pool))
+                (i32.gt_u (local.get $pool) (local.get $total)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.lt_s (call $regex_runtime_capacity (local.get $program)) (i32.const 0))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (call $ph (local.get $program) (global.get $PH_ROUTE_COUNT))
+      (then
+        (if (i32.gt_u (call $ph (local.get $program) (global.get $PH_ROUTE_COUNT)) (global.get $MAX_ROUTES)) (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+        (if (i32.eqz (call $pool_array_ok (local.get $program)
+          (call $ph (local.get $program) (global.get $PH_ROUTE_TABLE))
+          (call $ph (local.get $program) (global.get $PH_ROUTE_COUNT)) (i32.const 16)))
+          (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+        (if (i32.eqz (call $pool_array_ok (local.get $program)
+          (call $ph (local.get $program) (global.get $PH_GATE_TABLE))
+          (call $ph (local.get $program) (global.get $PH_GATE_CAPACITY)) (i32.const 20)))
+          (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+        (if (i32.and (call $ph (local.get $program) (global.get $PH_GATE_CAPACITY)) (i32.sub (call $ph (local.get $program) (global.get $PH_GATE_CAPACITY)) (i32.const 1)))
+          (then (return (global.get $STATUS_CORRUPT_PROGRAM))))))
+    (if (i32.or (i32.lt_u (local.get $nodes) (i32.const 2)) (i32.gt_u (local.get $nodes) (global.get $MAX_NODES)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    ;; regions in order: header | node table | code | pool, each inside total
+    (if (i32.ne (local.get $table) (global.get $PROGRAM_HEADER_SIZE))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.ne (local.get $code) (i32.add (local.get $table) (i32.mul (local.get $nodes) (global.get $NODE_SIZE))))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.ne (local.get $pool) (i32.add (local.get $code) (local.get $code_bytes)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.ne (local.get $total) (i32.add (local.get $pool) (local.get $pool_bytes)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.and (local.get $code_bytes) (i32.const 15))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.ge_u (call $ph (local.get $program) (global.get $PH_ROOT_NODE)) (local.get $nodes))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    ;; every node: code offset inside code, run terminated by END, operands in range
+    (local.set $i (i32.const 0))
+    (block $nodes_done
+      (loop $node_loop
+        (call $work_add (i32.const 1))
+        (br_if $nodes_done (i32.ge_u (local.get $i) (local.get $nodes)))
+        (local.set $entry (call $node_addr (local.get $program) (local.get $i)))
+        (local.set $pc (i32.load (local.get $entry)))
+        (if (i32.or (i32.lt_u (local.get $pc) (local.get $code))
+                    (i32.ge_u (local.get $pc) (i32.add (local.get $code) (local.get $code_bytes))))
+          (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+        (if (i32.and (local.get $pc) (i32.const 15))
+          (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+        (local.set $ptr (i32.load offset=8 (local.get $entry)))
+        (if (i32.ne (local.get $ptr) (global.get $NONE))
+          (then
+            (if (i32.eqz (call $pool_string_ok (local.get $program) (local.get $ptr)))
+              (then (return (global.get $STATUS_CORRUPT_PROGRAM))))))
+        (block $run_done
+          (loop $run
+        (call $work_add (i32.const 1))
+            (if (i32.ge_u (local.get $pc) (i32.add (local.get $code) (local.get $code_bytes)))
+              (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+            (local.set $op (i32.load (i32.add (local.get $program) (local.get $pc))))
+            (local.set $a (i32.load offset=4 (i32.add (local.get $program) (local.get $pc))))
+            (local.set $b (i32.load offset=8 (i32.add (local.get $program) (local.get $pc))))
+            (local.set $c (i32.load offset=12 (i32.add (local.get $program) (local.get $pc))))
+            (local.set $pc (i32.add (local.get $pc) (global.get $INSTRUCTION_SIZE)))
+            (br_if $run_done (i32.eq (local.get $op) (global.get $OP_END)))
+            (if (i32.gt_u (local.get $op) (global.get $OP_LAST))
+              (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+            (if (i32.eqz (call $validate_operands (local.get $program) (local.get $op) (local.get $a) (local.get $b) (local.get $c)))
+              (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+            (br $run)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $node_loop)))
+    ;; synthesized boolean nodes
+    (if (i32.ne (i32.load (i32.add (local.get $program) (call $node_code (local.get $program) (global.get $TRUE_NODE))))
+                (global.get $OP_END))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.ne (i32.load (i32.add (local.get $program) (call $node_code (local.get $program) (global.get $FALSE_NODE))))
+                (global.get $OP_FAIL))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.eqz (call $program_tables_ok (local.get $program)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (global.get $STATUS_OK))
+
+  (func $pool_ok (param $program i32) (param $off i32) (param $bytes i32) (result i32)
+    (local $pool i32) (local $pool_bytes i32)
+    (local.set $pool (call $ph (local.get $program) (global.get $PH_POOL_OFFSET)))
+    (local.set $pool_bytes (call $ph (local.get $program) (global.get $PH_POOL_BYTES)))
+    (if (i32.lt_u (local.get $off) (local.get $pool)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $bytes) (local.get $pool_bytes)) (then (return (i32.const 0))))
+    (i32.le_u (i32.sub (local.get $off) (local.get $pool)) (i32.sub (local.get $pool_bytes) (local.get $bytes))))
+
+  (func $pool_string_ok (param $program i32) (param $off i32) (result i32)
+    (if (i32.eqz (call $pool_ok (local.get $program) (local.get $off) (i32.const 4))) (then (return (i32.const 0))))
+    (call $pool_ok (local.get $program) (i32.add (local.get $off) (i32.const 4))
+                   (i32.load (i32.add (local.get $program) (local.get $off)))))
+
+  (func $pool_value_ok (param $program i32) (param $off i32) (result i32)
+    (local $len i32)
+    (if (i32.eqz (call $pool_ok (local.get $program) (local.get $off) (i32.const 8))) (then (return (i32.const 0))))
+    (local.set $len (i32.load (i32.add (local.get $program) (local.get $off))))
+    (if (i32.eqz (call $pool_ok (local.get $program) (i32.add (local.get $off) (i32.const 8)) (local.get $len)))
+      (then (return (i32.const 0))))
+    ;; the msgpack value must be exactly len bytes
+    (i32.eq (call $mp_skip (i32.add (i32.add (local.get $program) (local.get $off)) (i32.const 8))
+                           (i32.add (i32.add (i32.add (local.get $program) (local.get $off)) (i32.const 8)) (local.get $len)))
+            (i32.add (i32.add (i32.add (local.get $program) (local.get $off)) (i32.const 8)) (local.get $len))))
+
+  (func $pool_number_ok (param $program i32) (param $off i32) (result i32)
+    (local $k i32)
+    (if (i32.eqz (call $pool_value_ok (local.get $program) (local.get $off))) (then (return (i32.const 0))))
+    (local.set $k (call $mp_kind (i32.add (i32.add (local.get $program) (local.get $off)) (i32.const 8))
+                                 (i32.add (local.get $program) (call $ph (local.get $program) (global.get $PH_TOTAL_BYTES)))))
+    (i32.or (i32.eq (local.get $k) (global.get $K_INT)) (i32.eq (local.get $k) (global.get $K_FLOAT))))
+
+  ;; regex record: [program bytes:4][source string:4][program (8-aligned)]
+  (func $pool_regex_ok (param $program i32) (param $off i32) (result i32)
+    (local $bytes i32) (local $regex i32) (local $required i32)
+    (if (i32.and (local.get $off) (i32.const 7)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $pool_ok (local.get $program) (local.get $off) (i32.const 8))) (then (return (i32.const 0))))
+    (local.set $bytes (i32.load (i32.add (local.get $program) (local.get $off))))
+    (if (i32.eqz (call $pool_ok (local.get $program) (i32.add (local.get $off) (i32.const 8)) (local.get $bytes))) (then (return (i32.const 0))))
+    (if (i32.eqz (call $pool_string_ok (local.get $program) (i32.load offset=4 (i32.add (local.get $program) (local.get $off))))) (then (return (i32.const 0))))
+    (local.set $regex (i32.add (i32.add (local.get $program) (local.get $off)) (i32.const 8)))
+    (if (call $regex_validate_program (local.get $regex) (local.get $bytes)) (then (return (i32.const 0))))
+    (local.set $required (call $regex_continuation_size (i32.load offset=12 (local.get $regex))
+      (i32.load offset=20 (local.get $regex)) (i32.load offset=32 (local.get $regex))))
+    (if (i32.lt_s (local.get $required) (i32.const 0)) (then (return (i32.const 0))))
+    (i32.and (i32.ge_s (call $regex_runtime_capacity (local.get $program)) (i32.const 0))
+      (i32.ge_u (call $regex_runtime_capacity (local.get $program)) (local.get $required))))
+
+  (func $pool_list_ok (param $program i32) (param $off i32) (result i32)
+    (if (i32.eqz (call $pool_ok (local.get $program) (local.get $off) (i32.const 4))) (then (return (i32.const 0))))
+    (call $pool_array_ok (local.get $program) (i32.add (local.get $off) (i32.const 4))
+      (i32.load (i32.add (local.get $program) (local.get $off))) (i32.const 4)))
+
+  (func $node_ok (param $program i32) (param $node i32) (result i32)
+    (i32.lt_u (local.get $node) (call $ph (local.get $program) (global.get $PH_NODE_COUNT))))
+
+  (func $node_or_none_ok (param $program i32) (param $node i32) (result i32)
+    (i32.or (i32.eq (local.get $node) (global.get $NONE)) (call $node_ok (local.get $program) (local.get $node))))
+
+  (func $node_list_ok (param $program i32) (param $off i32) (result i32)
+    (local $count i32) (local $i i32)
+    (if (i32.eqz (call $pool_list_ok (local.get $program) (local.get $off))) (then (return (i32.const 0))))
+    (local.set $count (i32.load (i32.add (local.get $program) (local.get $off))))
+    (local.set $i (i32.const 0))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+        (if (i32.eqz (call $node_ok (local.get $program)
+              (i32.load (i32.add (i32.add (local.get $program) (local.get $off)) (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2)))))))
+          (then (return (i32.const 0))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (i32.const 1))
+
+  (func $validate_operands (param $program i32) (param $op i32) (param $a i32) (param $b i32) (param $c i32) (result i32)
+    (local $count i32) (local $i i32) (local $t i32) (local $cap i32) (local $entries i32) (local $e i32) (local $key i32)
+    (local $dep i32) (local $bits i32) (local $j i32) (local $n i32) (local $empty i32)
+    (if (i32.eq (local.get $op) (global.get $OP_FAIL)) (then (return (i32.const 1))))
+    (if (i32.eq (local.get $op) (global.get $OP_TYPE)) (then (return (i32.const 1))))
+    (if (i32.eq (local.get $op) (global.get $OP_CONST))
+      (then (return (call $pool_value_ok (local.get $program) (local.get $a)))))
+    (if (i32.eq (local.get $op) (global.get $OP_ENUM))
+      (then
+        (if (i32.eqz (call $pool_list_ok (local.get $program) (local.get $a))) (then (return (i32.const 0))))
+        (local.set $count (i32.load (i32.add (local.get $program) (local.get $a))))
+        (if (i32.gt_u (local.get $count) (global.get $MAX_ENUM_MEMBERS)) (then (return (i32.const 0))))
+        (local.set $i (i32.const 0))
+        (block $done
+          (loop $loop
+            (call $work_add (i32.const 1))
+            (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+            (if (i32.eqz (call $pool_value_ok (local.get $program)
+                  (i32.load (i32.add (i32.add (local.get $program) (local.get $a)) (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2)))))))
+              (then (return (i32.const 0))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $loop)))
+        (return (i32.const 1))))
+    (if (i32.and (i32.ge_u (local.get $op) (global.get $OP_MINIMUM)) (i32.le_u (local.get $op) (global.get $OP_MULTIPLE_OF)))
+      (then (return (call $pool_number_ok (local.get $program) (local.get $a)))))
+    (if (i32.and (i32.ge_u (local.get $op) (global.get $OP_MIN_LENGTH)) (i32.le_u (local.get $op) (global.get $OP_MAX_PROPERTIES)))
+      (then (return (i32.const 1))))
+    (if (i32.eq (local.get $op) (global.get $OP_OBJECT_PASS))
+      (then
+        (if (i32.eqz (call $pool_ok (local.get $program) (local.get $a) (global.get $OT_SIZE))) (then (return (i32.const 0))))
+        (local.set $t (i32.add (local.get $program) (local.get $a)))
+        (local.set $count (i32.load (local.get $t)))
+        (local.set $cap (i32.load offset=4 (local.get $t)))
+        (local.set $bits (i32.load offset=12 (local.get $t)))
+        (if (i32.gt_u (local.get $count) (global.get $MAX_KEY_TABLE_ENTRIES)) (then (return (i32.const 0))))
+        (if (i32.gt_u (local.get $bits) (global.get $MAX_KEY_TABLE_ENTRIES)) (then (return (i32.const 0))))
+        (if (local.get $cap)
+          (then
+            (if (i32.and (local.get $cap) (i32.sub (local.get $cap) (i32.const 1))) (then (return (i32.const 0))))
+            (if (i32.gt_u (local.get $count) (local.get $cap)) (then (return (i32.const 0))))
+            (local.set $entries (i32.load offset=8 (local.get $t)))
+            (if (i32.eqz (call $pool_array_ok (local.get $program) (local.get $entries) (local.get $cap) (global.get $OE_SIZE)))
+              (then (return (i32.const 0))))
+            (local.set $i (i32.const 0))
+            (block $done
+              (loop $loop
+                (call $work_add (i32.const 1))
+                (br_if $done (i32.ge_u (local.get $i) (local.get $cap)))
+                (local.set $e (i32.add (i32.add (local.get $program) (local.get $entries)) (i32.mul (local.get $i) (global.get $OE_SIZE))))
+                (local.set $key (i32.load offset=4 (local.get $e)))
+                (if (i32.eq (local.get $key) (global.get $NONE)) (then (local.set $empty (i32.const 1))))
+                (if (i32.ne (local.get $key) (global.get $NONE))
+                  (then
+                    (if (i32.eqz (call $pool_string_ok (local.get $program) (local.get $key))) (then (return (i32.const 0))))
+                    (if (i32.eqz (call $node_or_none_ok (local.get $program) (i32.load offset=8 (local.get $e)))) (then (return (i32.const 0))))
+                    (if (i32.ge_u (i32.load offset=12 (local.get $e)) (local.get $bits)) (then (return (i32.const 0))))
+                    (local.set $dep (i32.load offset=16 (local.get $e)))
+                    (if (i32.ne (local.get $dep) (global.get $NONE))
+                      (then
+                        (if (i32.eqz (call $pool_ok (local.get $program) (local.get $dep) (i32.const 8))) (then (return (i32.const 0))))
+                        (local.set $n (i32.and (i32.load (i32.add (local.get $program) (local.get $dep))) (i32.const 0x7fffffff)))
+                        (if (i32.eqz (call $pool_array_ok (local.get $program) (i32.add (local.get $dep) (i32.const 8))
+                          (local.get $n) (i32.const 4))) (then (return (i32.const 0))))
+                        (local.set $j (i32.const 0))
+                        (block $dd (loop $dl
+                          (br_if $dd (i32.ge_u (local.get $j) (local.get $n)))
+                          (call $work_add (i32.const 1))
+                          (if (i32.eqz (call $object_entry_ok (local.get $program) (local.get $entries) (local.get $cap)
+                            (i32.load (i32.add (i32.add (local.get $program) (local.get $dep))
+                              (i32.add (i32.const 8) (i32.shl (local.get $j) (i32.const 2)))))))
+                            (then (return (i32.const 0))))
+                          (local.set $j (i32.add (local.get $j) (i32.const 1)))
+                          (br $dl)))
+                        (if (i32.eqz (call $node_or_none_ok (local.get $program) (i32.load offset=4 (i32.add (local.get $program) (local.get $dep)))))
+                          (then (return (i32.const 0))))))))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $loop)))
+            ;; Open addressing must have a terminating empty slot.
+            (if (i32.eqz (local.get $empty)) (then (return (i32.const 0)))))
+          (else
+            (if (local.get $count) (then (return (i32.const 0))))))
+        (if (i32.ne (i32.load offset=16 (local.get $t)) (global.get $NONE))
+          (then
+            (local.set $dep (i32.load offset=16 (local.get $t)))
+            (if (i32.eqz (call $pool_list_ok (local.get $program) (local.get $dep))) (then (return (i32.const 0))))
+            (local.set $n (i32.load (i32.add (local.get $program) (local.get $dep))))
+            (local.set $j (i32.const 0))
+            (block $rd (loop $rl
+              (br_if $rd (i32.ge_u (local.get $j) (local.get $n)))
+              (call $work_add (i32.const 1))
+              (if (i32.eqz (call $object_entry_ok (local.get $program) (i32.load offset=8 (local.get $t)) (local.get $cap)
+                (i32.load (i32.add (i32.add (local.get $program) (local.get $dep))
+                  (i32.add (i32.const 4) (i32.shl (local.get $j) (i32.const 2)))))))
+                (then (return (i32.const 0))))
+              (local.set $j (i32.add (local.get $j) (i32.const 1)))
+              (br $rl)))))
+        (local.set $count (i32.load offset=28 (local.get $t)))
+        (if (local.get $count)
+          (then
+            (local.set $entries (i32.load offset=32 (local.get $t)))
+            (if (i32.eqz (call $pool_ok (local.get $program) (local.get $entries) (i32.const 4))) (then (return (i32.const 0))))
+            (if (i32.eqz (call $pool_array_ok (local.get $program) (i32.add (local.get $entries) (i32.const 4)) (local.get $count) (i32.const 8)))
+              (then (return (i32.const 0))))
+            (if (i32.ne (i32.load (i32.add (local.get $program) (local.get $entries))) (local.get $count)) (then (return (i32.const 0))))
+            (local.set $i (i32.const 0))
+            (block $pd (loop $pl
+              (call $work_add (i32.const 1))
+              (br_if $pd (i32.ge_u (local.get $i) (local.get $count)))
+              (if (i32.eqz (call $pool_regex_ok (local.get $program)
+                    (i32.load (i32.add (i32.add (local.get $program) (local.get $entries)) (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 3)))))))
+                (then (return (i32.const 0))))
+              (if (i32.eqz (call $node_ok (local.get $program)
+                    (i32.load (i32.add (i32.add (local.get $program) (local.get $entries)) (i32.add (i32.const 8) (i32.shl (local.get $i) (i32.const 3)))))))
+                (then (return (i32.const 0))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $pl)))))
+        (if (i32.eqz (call $node_or_none_ok (local.get $program) (i32.load offset=20 (local.get $t)))) (then (return (i32.const 0))))
+        (if (i32.eqz (call $node_or_none_ok (local.get $program) (i32.load offset=24 (local.get $t)))) (then (return (i32.const 0))))
+        (return (i32.const 1))))
+    (if (i32.eq (local.get $op) (global.get $OP_ARRAY_PASS))
+      (then
+        (if (i32.eqz (call $pool_ok (local.get $program) (local.get $a) (global.get $AT_SIZE))) (then (return (i32.const 0))))
+        (local.set $t (i32.add (local.get $program) (local.get $a)))
+        (if (i32.load (local.get $t))
+          (then
+            (if (i32.eqz (call $node_list_ok (local.get $program) (i32.load offset=4 (local.get $t)))) (then (return (i32.const 0))))
+            (if (i32.ne (i32.load (i32.add (local.get $program) (i32.load offset=4 (local.get $t)))) (i32.load (local.get $t)))
+              (then (return (i32.const 0))))))
+        (if (i32.eqz (call $node_or_none_ok (local.get $program) (i32.load offset=8 (local.get $t)))) (then (return (i32.const 0))))
+        (if (i32.eqz (call $node_or_none_ok (local.get $program) (i32.load offset=12 (local.get $t)))) (then (return (i32.const 0))))
+        (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $op) (global.get $OP_ALL_OF))
+                (i32.or (i32.eq (local.get $op) (global.get $OP_ANY_OF)) (i32.eq (local.get $op) (global.get $OP_ONE_OF))))
+      (then (return (call $node_list_ok (local.get $program) (local.get $a)))))
+    (if (i32.or (i32.eq (local.get $op) (global.get $OP_NOT)) (i32.eq (local.get $op) (global.get $OP_REF)))
+      (then (return (call $node_ok (local.get $program) (local.get $a)))))
+    (if (i32.eq (local.get $op) (global.get $OP_PATTERN))
+      (then (return (call $pool_regex_ok (local.get $program) (local.get $a)))))
+    (if (i32.eq (local.get $op) (global.get $OP_FORMAT))
+      (then (return (i32.and (i32.ge_u (local.get $a) (i32.const 1)) (i32.le_u (local.get $a) (global.get $FMT_COUNT))))))
+    (if (i32.or (i32.eq (local.get $op) (global.get $OP_UNEVALUATED_PROPERTIES)) (i32.eq (local.get $op) (global.get $OP_UNEVALUATED_ITEMS)))
+      (then (return (call $node_ok (local.get $program) (local.get $a)))))
+    (if (i32.eq (local.get $op) (global.get $OP_DYNAMIC_REF))
+      (then
+        (if (i32.eqz (call $node_ok (local.get $program) (local.get $a))) (then (return (i32.const 0))))
+        (if (i32.eq (local.get $b) (global.get $NONE)) (then (return (i32.const 0))))
+        (return (call $pool_string_ok (local.get $program) (local.get $b)))))
+    (if (i32.eq (local.get $op) (global.get $OP_IF))
+      (then
+        (if (i32.eqz (call $node_ok (local.get $program) (local.get $a))) (then (return (i32.const 0))))
+        (if (i32.eqz (call $node_or_none_ok (local.get $program) (local.get $b))) (then (return (i32.const 0))))
+        (return (call $node_or_none_ok (local.get $program) (local.get $c)))))
+    ;; Items 2/3 opcodes are not emitted yet: reject so a stale program fails loud.
+    (i32.const 0))
+
+  ;; ==========================================================================
+  ;; Validation continuation (SCHEMA_CONTINUATION). Frames hold
+  ;; document-relative offsets and program-relative pcs, so relocation
+  ;; between grants only rewrites the two header addresses.
+  ;; ==========================================================================
+
+  (global $CONT_MAGIC i32 (i32.const 0x56435353))
+  (global $CONT_VERSION i32 (i32.const 3))
+  (global $CONT_HEADER_SIZE i32 (i32.const 168))
+  (global $FRAME_SIZE i32 (i32.const 64))
+  (global $PATH_ENTRY_SIZE i32 (i32.const 12))
+  (global $ERROR_SIZE i32 (i32.const 32))
+  (global $UNIQUE_ENTRY_SIZE i32 (i32.const 12))
+
+  (global $CH_MAGIC i32 (i32.const 0))
+  (global $CH_VERSION i32 (i32.const 4))
+  (global $CH_PROGRAM_ADDRESS i32 (i32.const 8))
+  (global $CH_PROGRAM_BYTES i32 (i32.const 12))
+  (global $CH_DOCUMENT_ADDRESS i32 (i32.const 16))
+  (global $CH_DOCUMENT_BYTES i32 (i32.const 20))
+  (global $CH_MODE i32 (i32.const 24))
+  (global $CH_PHASE i32 (i32.const 28))
+  (global $CH_FRAME_COUNT i32 (i32.const 32))
+  (global $CH_FRAME_CAPACITY i32 (i32.const 36))
+  (global $CH_FRAMES_OFFSET i32 (i32.const 40))
+  (global $CH_PATH_COUNT i32 (i32.const 44))
+  (global $CH_PATH_OFFSET i32 (i32.const 48))
+  (global $CH_ARENA_OFFSET i32 (i32.const 52))
+  (global $CH_ARENA_CURSOR i32 (i32.const 56))
+  (global $CH_ARENA_CAPACITY i32 (i32.const 60))
+  (global $CH_ERROR_COUNT i32 (i32.const 64))
+  (global $CH_ERROR_CAPACITY i32 (i32.const 68))
+  (global $CH_ERROR_STORED i32 (i32.const 72))
+  (global $CH_ERRORS_OFFSET i32 (i32.const 76))
+  (global $CH_ERROR_PATH_OFFSET i32 (i32.const 80))
+  (global $CH_ERROR_PATH_CURSOR i32 (i32.const 84))
+  (global $CH_ERROR_PATH_CAPACITY i32 (i32.const 88))
+  (global $CH_RESULT i32 (i32.const 92))
+  (global $CH_FUEL_CHARGED i32 (i32.const 96))
+  (global $CH_TRIAL_DEPTH i32 (i32.const 100))
+  (global $CH_ARENA_REQUIRED i32 (i32.const 104))
+  (global $CH_REGEX_OFFSET i32 (i32.const 108))
+  (global $CH_REGEX_CAPACITY i32 (i32.const 112))
+
+  (global $MODE_TEST i32 (i32.const 0))
+  (global $MODE_VALIDATE i32 (i32.const 1))
+  (global $PHASE_RUNNING i32 (i32.const 0))
+  (global $PHASE_COMPLETE i32 (i32.const 1))
+
+  (global $F_KIND i32 (i32.const 0))
+  (global $F_NODE i32 (i32.const 4))
+  (global $F_PC i32 (i32.const 8))
+  (global $F_VALUE i32 (i32.const 12))
+  (global $F_PATH_CURSOR_MARK i32 (i32.const 16))
+  (global $F_CURSOR i32 (i32.const 20))
+  (global $F_INDEX i32 (i32.const 24))
+  (global $F_COUNT i32 (i32.const 28))
+  (global $F_AUX i32 (i32.const 32))
+  (global $F_AUX2 i32 (i32.const 36))
+  (global $F_AUX3 i32 (i32.const 40))
+  (global $F_ERROR_MARK i32 (i32.const 44))
+  (global $F_ERROR_CURSOR_MARK i32 (i32.const 48))
+  (global $F_ARENA_MARK i32 (i32.const 52))
+  (global $F_CHILD_RESULT i32 (i32.const 56))
+  (global $F_FLAGS i32 (i32.const 60))
+
+  (global $FK_NODE i32 (i32.const 0))
+  (global $FK_OBJECT_PASS i32 (i32.const 1))
+  (global $FK_ARRAY_PASS i32 (i32.const 2))
+  (global $FK_ALL_OF i32 (i32.const 3))
+  (global $FK_ANY_OF i32 (i32.const 4))
+  (global $FK_ONE_OF i32 (i32.const 5))
+  (global $FK_NOT i32 (i32.const 6))
+  (global $FK_IF i32 (i32.const 7))
+  (global $FK_REGEX i32 (i32.const 8))
+  (global $FK_UNEVAL i32 (i32.const 9))
+  (global $NODE_FLAG_TRACK i32 (i32.const 1))
+  (global $KW_UNEVALUATED_PROPERTIES i32 (i32.const 52))
+  (global $KW_UNEVALUATED_ITEMS i32 (i32.const 53))
+  (global $CH_GRANT i32 (i32.const 116))
+
+  (global $FF_TRIAL i32 (i32.const 1))
+  (global $FF_PATH_PUSHED i32 (i32.const 2))
+  (global $FF_CONTAINS_TRIAL i32 (i32.const 4))
+  (global $FF_REGEX_PENDING i32 (i32.const 8))   ;; a regex child just ran; CHILD_RESULT is its verdict
+  (global $FF_MATCHED i32 (i32.const 16))        ;; object pass: some pattern matched this key
+  ;; sub-step of a pass frame lives in bits 8..15
+  (global $FF_STEP_SHIFT i32 (i32.const 8))
+  (global $FF_STEP_MASK i32 (i32.const 0xff00))
+
+  (func $ch (param $cont i32) (param $field i32) (result i32)
+    (i32.load (i32.add (local.get $cont) (local.get $field))))
+  (func $ch_set (param $cont i32) (param $field i32) (param $v i32)
+    (i32.store (i32.add (local.get $cont) (local.get $field)) (local.get $v)))
+
+  (func $continuation_size (export "continuation_size")
+    (param $program i32) (param $capacity i32)
+    (param $max_depth i32) (param $error_capacity i32) (param $arena_bytes i32)
+    (result i32)
+    (local $total i64) (local $part i32)
+    ;; the program header is trusted here; initialize_validation validates
+    ;; the program unless the caller marks it trusted
+    (if (i32.eqz (call $direct_span (local.get $program) (local.get $capacity) (i32.const 0))) (then (return (i32.const -1))))
+    (if (i32.lt_u (local.get $capacity) (global.get $PROGRAM_HEADER_SIZE)) (then (return (i32.const -1))))
+    (if (i32.or (i32.eqz (local.get $max_depth)) (i32.gt_u (local.get $max_depth) (i32.const 65536)))
+      (then (return (i32.const -1))))
+    (if (i32.gt_u (local.get $error_capacity) (i32.const 65536)) (then (return (i32.const -1))))
+    (if (i32.gt_u (local.get $arena_bytes) (i32.const 0x10000000)) (then (return (i32.const -1))))
+    (local.set $total (i64.add (i64.extend_i32_u (global.get $CONT_HEADER_SIZE))
+      (i64.mul (i64.extend_i32_u (local.get $max_depth))
+        (i64.extend_i32_u (i32.add (global.get $FRAME_SIZE) (global.get $PATH_ENTRY_SIZE))))))
+    (local.set $total (i64.and (i64.add (local.get $total) (i64.const 7)) (i64.const -8)))
+    (local.set $total (i64.add (local.get $total) (i64.extend_i32_u (call $align8 (local.get $arena_bytes)))))
+    (local.set $total (i64.add (local.get $total)
+      (i64.mul (i64.extend_i32_u (local.get $error_capacity))
+        (i64.extend_i32_u (i32.add (global.get $ERROR_SIZE) (global.get $ERROR_PATH_BYTES))))))
+    (local.set $total (i64.and (i64.add (local.get $total) (i64.const 7)) (i64.const -8)))
+    (local.set $part (call $regex_runtime_capacity (local.get $program)))
+    (if (i32.lt_s (local.get $part) (i32.const 0)) (then (return (i32.const -1))))
+    (local.set $total (i64.add (local.get $total) (i64.extend_i32_u (call $align8 (local.get $part)))))
+    (if (i32.gt_u (call $ph (local.get $program) (global.get $PH_ROUTE_COUNT)) (global.get $MAX_ROUTES)) (then (return (i32.const -1))))
+    (local.set $total (i64.add (local.get $total)
+      (i64.mul (i64.extend_i32_u (call $ph (local.get $program) (global.get $PH_ROUTE_COUNT)))
+        (i64.extend_i32_u (global.get $RT_SIZE)))))
+    (if (i64.gt_u (local.get $total) (i64.const 0x40000000)) (then (return (i32.const -1))))
+    (i32.wrap_i64 (local.get $total)))
+
+  (func $initialize_validation_impl
+    (param $program i32) (param $program_capacity i32)
+    (param $document i32) (param $document_bytes i32)
+    (param $mode i32) (param $max_depth i32) (param $error_capacity i32) (param $arena_bytes i32)
+    (param $cont i32) (param $cont_capacity i32)
+    (result i32)
+    (local $required i32) (local $off i32) (local $status i32)
+    ;; mode bit 1 (TRUSTED) skips program validation for programs the
+    ;; caller has already validated via compile/load
+    (if (i32.eqz (i32.and (local.get $mode) (i32.const 2)))
+      (then
+        (local.set $status (call $validate_program (local.get $program) (local.get $program_capacity)))
+        (if (i32.ne (local.get $status) (global.get $STATUS_OK)) (then (return (local.get $status))))))
+    (local.set $mode (i32.and (local.get $mode) (i32.const 1)))
+    (local.set $required (call $continuation_size (local.get $program) (local.get $program_capacity)
+                                                  (local.get $max_depth) (local.get $error_capacity) (local.get $arena_bytes)))
+    (if (i32.lt_s (local.get $required) (i32.const 0)) (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+    (if (i32.gt_u (local.get $required) (local.get $cont_capacity)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    ;; the document must be one complete value
+    (if (i32.ne (call $mp_skip (local.get $document) (i32.add (local.get $document) (local.get $document_bytes)))
+                (i32.add (local.get $document) (local.get $document_bytes)))
+      (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+    (call $work_zero (local.get $cont) (i32.const 0) (global.get $CONT_HEADER_SIZE))
+    (call $ch_set (local.get $cont) (global.get $CH_MAGIC) (global.get $CONT_MAGIC))
+    (call $ch_set (local.get $cont) (global.get $CH_VERSION) (global.get $CONT_VERSION))
+    (call $ch_set (local.get $cont) (global.get $CH_PROGRAM_ADDRESS) (local.get $program))
+    (call $ch_set (local.get $cont) (global.get $CH_PROGRAM_BYTES) (call $ph (local.get $program) (global.get $PH_TOTAL_BYTES)))
+    (call $ch_set (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS) (local.get $document))
+    (call $ch_set (local.get $cont) (global.get $CH_DOCUMENT_BYTES) (local.get $document_bytes))
+    (call $ch_set (local.get $cont) (global.get $CH_MODE) (local.get $mode))
+    (call $ch_set (local.get $cont) (global.get $CH_PHASE) (global.get $PHASE_RUNNING))
+    (call $ch_set (local.get $cont) (global.get $CH_FRAME_CAPACITY) (local.get $max_depth))
+    (local.set $off (global.get $CONT_HEADER_SIZE))
+    (call $ch_set (local.get $cont) (global.get $CH_FRAMES_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (i32.mul (local.get $max_depth) (global.get $FRAME_SIZE))))
+    (call $ch_set (local.get $cont) (global.get $CH_PATH_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (i32.mul (local.get $max_depth) (global.get $PATH_ENTRY_SIZE))))
+    (local.set $off (call $align8 (local.get $off)))
+    (call $ch_set (local.get $cont) (global.get $CH_ARENA_OFFSET) (local.get $off))
+    (call $ch_set (local.get $cont) (global.get $CH_ARENA_CURSOR) (i32.const 0))
+    (call $ch_set (local.get $cont) (global.get $CH_ARENA_CAPACITY) (call $align8 (local.get $arena_bytes)))
+    (local.set $off (i32.add (local.get $off) (call $align8 (local.get $arena_bytes))))
+    (call $ch_set (local.get $cont) (global.get $CH_ERROR_CAPACITY) (local.get $error_capacity))
+    (call $ch_set (local.get $cont) (global.get $CH_ERRORS_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (i32.mul (local.get $error_capacity) (global.get $ERROR_SIZE))))
+    (call $ch_set (local.get $cont) (global.get $CH_ERROR_PATH_OFFSET) (local.get $off))
+    (call $ch_set (local.get $cont) (global.get $CH_ERROR_PATH_CAPACITY) (i32.mul (local.get $error_capacity) (global.get $ERROR_PATH_BYTES)))
+    (local.set $off (i32.add (local.get $off) (i32.mul (local.get $error_capacity) (global.get $ERROR_PATH_BYTES))))
+    (local.set $off (call $align8 (local.get $off)))
+    (call $ch_set (local.get $cont) (global.get $CH_REGEX_OFFSET) (local.get $off))
+    (call $ch_set (local.get $cont) (global.get $CH_REGEX_CAPACITY) (call $align8 (call $regex_runtime_capacity (local.get $program))))
+    (local.set $off (i32.add (local.get $off) (call $align8 (call $regex_runtime_capacity (local.get $program)))))
+    (call $ch_set (local.get $cont) (global.get $CH_RESULT) (global.get $STATUS_OK))
+    ;; set programs: the route result table, gate pass pending
+    (call $ch_set (local.get $cont) (global.get $CH_ROUTE_COUNT) (call $ph (local.get $program) (global.get $PH_ROUTE_COUNT)))
+    (call $ch_set (local.get $cont) (global.get $CH_ROUTES_OFFSET) (local.get $off))
+    (call $ch_set (local.get $cont) (global.get $CH_ROUTE_CURSOR) (i32.const -1))
+    (call $ch_set (local.get $cont) (global.get $CH_ROUTE_ABORT) (i32.const 0))
+    (if (call $ph (local.get $program) (global.get $PH_ROUTE_COUNT))
+      (then
+        (call $work_zero (i32.add (local.get $cont) (local.get $off)) (i32.const 0)
+          (i32.mul (call $ph (local.get $program) (global.get $PH_ROUTE_COUNT)) (global.get $RT_SIZE)))
+        (return (global.get $STATUS_OK))))
+    ;; root frame
+    (call $push_frame (local.get $cont) (global.get $FK_NODE)
+      (call $ph (local.get $program) (global.get $PH_ROOT_NODE)) (i32.const 0) (i32.const 0))
+    (drop)
+    (global.get $STATUS_OK))
+
+  ;; Rebind absolute buffer addresses after the caller relocated them.
+  (func $rebind_validation (export "rebind_validation")
+    (param $cont i32) (param $program i32) (param $document i32) (result i32)
+    (local $frame i32) (local $rc i32)
+    (if (i32.or
+          (i32.ne (call $ch (local.get $cont) (global.get $CH_MAGIC)) (global.get $CONT_MAGIC))
+          (i32.ne (call $ch (local.get $cont) (global.get $CH_VERSION)) (global.get $CONT_VERSION)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (call $ch_set (local.get $cont) (global.get $CH_PROGRAM_ADDRESS) (local.get $program))
+    (call $ch_set (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS) (local.get $document))
+    ;; a parked regex match holds absolute program/input addresses
+    (if (call $ch (local.get $cont) (global.get $CH_FRAME_COUNT))
+      (then
+        (local.set $frame (call $top_frame (local.get $cont)))
+        (if (i32.and (i32.eq (call $fr (local.get $frame) (global.get $F_KIND)) (global.get $FK_REGEX))
+                     (i32.eq (call $fr (local.get $frame) (global.get $F_INDEX)) (i32.const 1)))
+          (then
+            (local.set $rc (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_REGEX_OFFSET))))
+            (i32.store offset=8 (local.get $rc) (i32.add (i32.add (local.get $program) (call $fr (local.get $frame) (global.get $F_AUX))) (i32.const 8)))
+            (i32.store offset=16 (local.get $rc) (i32.add (local.get $document) (call $fr (local.get $frame) (global.get $F_VALUE))))))))
+    (global.get $STATUS_OK))
+
+  (func $frame_at (param $cont i32) (param $index i32) (result i32)
+    (i32.add (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_FRAMES_OFFSET)))
+             (i32.mul (local.get $index) (global.get $FRAME_SIZE))))
+
+  (func $top_frame (param $cont i32) (result i32)
+    (call $frame_at (local.get $cont) (i32.sub (call $ch (local.get $cont) (global.get $CH_FRAME_COUNT)) (i32.const 1))))
+
+  (func $fr (param $frame i32) (param $field i32) (result i32)
+    (i32.load (i32.add (local.get $frame) (local.get $field))))
+  (func $fr_set (param $frame i32) (param $field i32) (param $v i32)
+    (i32.store (i32.add (local.get $frame) (local.get $field)) (local.get $v)))
+
+  (func $frame_step (param $frame i32) (result i32)
+    (i32.shr_u (i32.and (call $fr (local.get $frame) (global.get $F_FLAGS)) (global.get $FF_STEP_MASK)) (global.get $FF_STEP_SHIFT)))
+  (func $frame_set_step (param $frame i32) (param $step i32)
+    (call $fr_set (local.get $frame) (global.get $F_FLAGS)
+      (i32.or (i32.and (call $fr (local.get $frame) (global.get $F_FLAGS)) (i32.xor (global.get $FF_STEP_MASK) (i32.const -1)))
+              (i32.shl (local.get $step) (global.get $FF_STEP_SHIFT)))))
+
+  ;; Push a frame evaluating `node` (for FK_NODE) at document offset
+  ;; `value`. Returns 1, or 0 when the frame stack is full (caller reports
+  ;; LIMIT_EXCEEDED).
+  (func $push_frame (param $cont i32) (param $kind i32) (param $node i32) (param $value i32) (param $flags i32) (result i32)
+    (local $count i32) (local $frame i32) (local $program i32) (local $doc i32) (local $vk i32) (local $h i32) (local $n i32) (local $bits i32)
+    (local.set $count (call $ch (local.get $cont) (global.get $CH_FRAME_COUNT)))
+    (if (i32.ge_u (local.get $count) (call $ch (local.get $cont) (global.get $CH_FRAME_CAPACITY)))
+      (then (return (i32.const 0))))
+    (local.set $frame (call $frame_at (local.get $cont) (local.get $count)))
+    (local.set $program (call $ch (local.get $cont) (global.get $CH_PROGRAM_ADDRESS)))
+    (call $work_zero (local.get $frame) (i32.const 0) (global.get $FRAME_SIZE))
+    (call $fr_set (local.get $frame) (global.get $F_KIND) (local.get $kind))
+    (call $fr_set (local.get $frame) (global.get $F_NODE) (local.get $node))
+    (call $fr_set (local.get $frame) (global.get $F_AUX) (global.get $NONE))
+    (if (i32.eq (local.get $kind) (global.get $FK_NODE))
+      (then (call $fr_set (local.get $frame) (global.get $F_PC) (call $node_code (local.get $program) (local.get $node)))))
+    (call $fr_set (local.get $frame) (global.get $F_VALUE) (local.get $value))
+    (call $fr_set (local.get $frame) (global.get $F_ERROR_MARK) (call $ch (local.get $cont) (global.get $CH_ERROR_COUNT)))
+    (call $fr_set (local.get $frame) (global.get $F_ERROR_CURSOR_MARK) (call $ch (local.get $cont) (global.get $CH_ERROR_STORED)))
+    (call $fr_set (local.get $frame) (global.get $F_PATH_CURSOR_MARK) (call $ch (local.get $cont) (global.get $CH_ERROR_PATH_CURSOR)))
+    (call $fr_set (local.get $frame) (global.get $F_ARENA_MARK) (call $ch (local.get $cont) (global.get $CH_ARENA_CURSOR)))
+    (call $fr_set (local.get $frame) (global.get $F_FLAGS) (local.get $flags))
+    (if (i32.and (local.get $flags) (global.get $FF_TRIAL))
+      (then (call $ch_set (local.get $cont) (global.get $CH_TRIAL_DEPTH)
+        (i32.add (call $ch (local.get $cont) (global.get $CH_TRIAL_DEPTH)) (i32.const 1)))))
+    ;; the parent's CHILD_RESULT is reset so a stale success cannot leak
+    (if (local.get $count)
+      (then (call $fr_set (call $frame_at (local.get $cont) (i32.sub (local.get $count) (i32.const 1)))
+                          (global.get $F_CHILD_RESULT) (i32.const 0))))
+    (call $ch_set (local.get $cont) (global.get $CH_FRAME_COUNT) (i32.add (local.get $count) (i32.const 1)))
+    ;; evaluated-set tracking for unevaluatedProperties/Items
+    (if (i32.eq (local.get $kind) (global.get $FK_NODE))
+      (then
+        (if (i32.and (i32.load offset=12 (call $node_addr (local.get $program) (local.get $node))) (global.get $NODE_FLAG_TRACK))
+          (then
+            (local.set $doc (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS)))
+            (call $mp_header (i32.add (local.get $doc) (local.get $value))
+                             (i32.add (local.get $doc) (call $ch (local.get $cont) (global.get $CH_DOCUMENT_BYTES))))
+            (local.set $n) (local.set $h) (local.set $vk)
+            (if (i32.or (i32.eq (local.get $vk) (global.get $K_MAP)) (i32.eq (local.get $vk) (global.get $K_ARRAY)))
+              (then
+                (local.set $bits (call $arena_alloc (local.get $cont) (i32.shl (i32.shr_u (i32.add (local.get $n) (i32.const 31)) (i32.const 5)) (i32.const 2))))
+                (if (i32.lt_s (local.get $bits) (i32.const 0)) (then (return (i32.const 0))))
+                (call $fr_set (local.get $frame) (global.get $F_AUX) (local.get $bits))
+                (call $fr_set (local.get $frame) (global.get $F_COUNT) (local.get $n))))))))
+    (i32.const 1))
+
+  ;; Nearest ancestor NODE frame evaluating the same value that owns an
+  ;; evaluated set, reached without crossing a NOT frame. Returns the
+  ;; frame or 0.
+  (func $annotation_target (param $cont i32) (param $index i32) (param $value i32) (result i32)
+    (local $frame i32) (local $kind i32)
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.lt_s (local.get $index) (i32.const 0)))
+      (local.set $frame (call $frame_at (local.get $cont) (local.get $index)))
+      (if (i32.ne (call $fr (local.get $frame) (global.get $F_VALUE)) (local.get $value)) (then (return (i32.const 0))))
+      (local.set $kind (call $fr (local.get $frame) (global.get $F_KIND)))
+      (if (i32.eq (local.get $kind) (global.get $FK_NOT)) (then (return (i32.const 0))))
+      (if (i32.eq (local.get $kind) (global.get $FK_NODE))
+        (then
+          (if (i32.ne (call $fr (local.get $frame) (global.get $F_AUX)) (global.get $NONE)) (then (return (local.get $frame))))
+          (return (i32.const 0))))
+      (local.set $index (i32.sub (local.get $index) (i32.const 1)))
+      (br $l)))
+    (i32.const 0))
+
+  ;; The NODE frame that pushed the current pass frame, when it tracks.
+  (func $pass_owner (param $cont i32) (result i32)
+    (local $frame i32)
+    (local.set $frame (call $frame_at (local.get $cont) (i32.sub (call $ch (local.get $cont) (global.get $CH_FRAME_COUNT)) (i32.const 2))))
+    (if (i32.ne (call $fr (local.get $frame) (global.get $F_AUX)) (global.get $NONE)) (then (return (local.get $frame))))
+    (i32.const 0))
+
+  (func $mark_evaluated (param $cont i32) (param $target i32) (param $bit i32)
+    (if (local.get $target)
+      (then (call $bit_set (local.get $cont) (call $fr (local.get $target) (global.get $F_AUX)) (local.get $bit)))))
+
+  ;; Pop the top frame: compute its result, roll back trial failures,
+  ;; release arena and path, feed the parent.
+  (func $pop_frame (param $cont i32)
+    (local $count i32) (local $frame i32) (local $result i32) (local $flags i32) (local $parent i32) (local $mark i32) (local $target i32)
+    (local.set $count (call $ch (local.get $cont) (global.get $CH_FRAME_COUNT)))
+    (local.set $frame (call $frame_at (local.get $cont) (i32.sub (local.get $count) (i32.const 1))))
+    (local.set $flags (call $fr (local.get $frame) (global.get $F_FLAGS)))
+    (local.set $result (i32.eq (call $ch (local.get $cont) (global.get $CH_ERROR_COUNT))
+                               (call $fr (local.get $frame) (global.get $F_ERROR_MARK))))
+    (if (i32.and (local.get $flags) (global.get $FF_TRIAL))
+      (then
+        (call $ch_set (local.get $cont) (global.get $CH_TRIAL_DEPTH)
+          (i32.sub (call $ch (local.get $cont) (global.get $CH_TRIAL_DEPTH)) (i32.const 1)))
+        (if (i32.eqz (local.get $result))
+          (then
+            ;; discard the trial's errors
+            (call $ch_set (local.get $cont) (global.get $CH_ERROR_COUNT) (call $fr (local.get $frame) (global.get $F_ERROR_MARK)))
+            (call $ch_set (local.get $cont) (global.get $CH_ERROR_STORED) (call $fr (local.get $frame) (global.get $F_ERROR_CURSOR_MARK)))
+            (call $ch_set (local.get $cont) (global.get $CH_ERROR_PATH_CURSOR) (call $fr (local.get $frame) (global.get $F_PATH_CURSOR_MARK)))))))
+    (call $ch_set (local.get $cont) (global.get $CH_ARENA_CURSOR) (call $fr (local.get $frame) (global.get $F_ARENA_MARK)))
+    (if (i32.and (local.get $flags) (global.get $FF_PATH_PUSHED))
+      (then (call $ch_set (local.get $cont) (global.get $CH_PATH_COUNT)
+        (i32.sub (call $ch (local.get $cont) (global.get $CH_PATH_COUNT)) (i32.const 1)))))
+    (local.set $count (i32.sub (local.get $count) (i32.const 1)))
+    (call $ch_set (local.get $cont) (global.get $CH_FRAME_COUNT) (local.get $count))
+    (if (local.get $count)
+      (then
+        (local.set $parent (call $frame_at (local.get $cont) (i32.sub (local.get $count) (i32.const 1))))
+        (call $fr_set (local.get $parent) (global.get $F_CHILD_RESULT) (local.get $result))
+        (if (i32.and (local.get $flags) (global.get $FF_CONTAINS_TRIAL))
+          (then
+            (call $fr_set (local.get $parent) (global.get $F_AUX3)
+              (i32.add (call $fr (local.get $parent) (global.get $F_AUX3)) (local.get $result)))
+            ;; an item matching contains counts as evaluated
+            (if (local.get $result)
+              (then (call $mark_evaluated (local.get $cont)
+                (call $annotation_target (local.get $cont) (i32.sub (local.get $count) (i32.const 2)) (call $fr (local.get $parent) (global.get $F_VALUE)))
+                (call $fr (local.get $parent) (global.get $F_INDEX)))))))
+        ;; a successful same-value subschema hands its evaluated set upward
+        (if (i32.and (local.get $result)
+                     (i32.and (i32.eq (call $fr (local.get $frame) (global.get $F_KIND)) (global.get $FK_NODE))
+                              (i32.ne (call $fr (local.get $frame) (global.get $F_AUX)) (global.get $NONE))))
+          (then
+            (local.set $target (call $annotation_target (local.get $cont) (i32.sub (local.get $count) (i32.const 1)) (call $fr (local.get $frame) (global.get $F_VALUE))))
+            (if (local.get $target)
+              (then (call $bits_or (local.get $cont) (call $fr (local.get $target) (global.get $F_AUX)) (call $fr (local.get $frame) (global.get $F_AUX))
+                                   (call $fr (local.get $frame) (global.get $F_COUNT))))))))
+      (else
+        (if (call $ch (local.get $cont) (global.get $CH_ROUTE_COUNT))
+          (then (call $set_route_finish (local.get $cont) (local.get $result)))
+          (else
+            (call $ch_set (local.get $cont) (global.get $CH_PHASE) (global.get $PHASE_COMPLETE))
+            (call $ch_set (local.get $cont) (global.get $CH_RESULT)
+              (select (global.get $STATUS_VALID) (global.get $STATUS_INVALID)
+                      (i32.eqz (call $ch (local.get $cont) (global.get $CH_ERROR_COUNT))))))))))
+
+  ;; Path stack: kind 0 = key (document offset, length), 1 = index.
+  (func $push_path (param $cont i32) (param $kind i32) (param $a i32) (param $b i32)
+    (local $count i32) (local $entry i32)
+    (local.set $count (call $ch (local.get $cont) (global.get $CH_PATH_COUNT)))
+    (local.set $entry (i32.add (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_PATH_OFFSET)))
+                               (i32.mul (local.get $count) (global.get $PATH_ENTRY_SIZE))))
+    (i32.store (local.get $entry) (local.get $kind))
+    (i32.store offset=4 (local.get $entry) (local.get $a))
+    (i32.store offset=8 (local.get $entry) (local.get $b))
+    (call $ch_set (local.get $cont) (global.get $CH_PATH_COUNT) (i32.add (local.get $count) (i32.const 1))))
+
+  ;; Arena allocation (8-aligned, zero-filled). Returns arena-relative
+  ;; offset or -1 when full (ARENA_REQUIRED records the shortfall).
+  (func $arena_alloc (param $cont i32) (param $bytes i32) (result i32)
+    (local $cursor i32) (local $cap i32)
+    (local.set $bytes (call $align8 (local.get $bytes)))
+    (local.set $cursor (call $ch (local.get $cont) (global.get $CH_ARENA_CURSOR)))
+    (local.set $cap (call $ch (local.get $cont) (global.get $CH_ARENA_CAPACITY)))
+    (if (i32.gt_u (local.get $bytes) (i32.sub (local.get $cap) (local.get $cursor)))
+      (then
+        (call $ch_set (local.get $cont) (global.get $CH_ARENA_REQUIRED) (i32.add (local.get $cursor) (local.get $bytes)))
+        (return (i32.const -1))))
+    (call $work_zero (i32.add (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_ARENA_OFFSET))) (local.get $cursor))
+                 (i32.const 0) (local.get $bytes))
+    (call $ch_set (local.get $cont) (global.get $CH_ARENA_CURSOR) (i32.add (local.get $cursor) (local.get $bytes)))
+    (local.get $cursor))
+
+  (func $arena_addr (param $cont i32) (param $off i32) (result i32)
+    (i32.add (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_ARENA_OFFSET))) (local.get $off)))
+
+  ;; Write one byte into the error-path region; returns 0 when full.
+  (func $epath_byte (param $cont i32) (param $b i32) (result i32)
+    (local $cursor i32)
+    (call $work_add (i32.const 1))
+    (local.set $cursor (call $ch (local.get $cont) (global.get $CH_ERROR_PATH_CURSOR)))
+    (if (i32.ge_u (local.get $cursor) (call $ch (local.get $cont) (global.get $CH_ERROR_PATH_CAPACITY)))
+      (then (return (i32.const 0))))
+    (i32.store8 (i32.add (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_ERROR_PATH_OFFSET))) (local.get $cursor))
+                (local.get $b))
+    (call $ch_set (local.get $cont) (global.get $CH_ERROR_PATH_CURSOR) (i32.add (local.get $cursor) (i32.const 1)))
+    (i32.const 1))
+
+  ;; Copy bytes into the error-path region with RFC 6901 escaping when
+  ;; $escape is set. Returns 0 when full.
+  (func $epath_bytes (param $cont i32) (param $addr i32) (param $len i32) (param $escape i32) (result i32)
+    (local $b i32)
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.eqz (local.get $len)))
+        (local.set $b (i32.load8_u (local.get $addr)))
+        (if (i32.and (local.get $escape) (i32.eq (local.get $b) (i32.const 0x7e)))
+          (then
+            (if (i32.eqz (call $epath_byte (local.get $cont) (i32.const 0x7e))) (then (return (i32.const 0))))
+            (local.set $b (i32.const 0x30)))
+          (else
+            (if (i32.and (local.get $escape) (i32.eq (local.get $b) (i32.const 0x2f)))
+              (then
+                (if (i32.eqz (call $epath_byte (local.get $cont) (i32.const 0x7e))) (then (return (i32.const 0))))
+                (local.set $b (i32.const 0x31))))))
+        (if (i32.eqz (call $epath_byte (local.get $cont) (local.get $b))) (then (return (i32.const 0))))
+        (local.set $addr (i32.add (local.get $addr) (i32.const 1)))
+        (local.set $len (i32.sub (local.get $len) (i32.const 1)))
+        (br $loop)))
+    (i32.const 1))
+
+  (func $epath_decimal (param $cont i32) (param $v i32) (result i32)
+    (local $div i32) (local $started i32) (local $d i32)
+    (if (i32.eqz (local.get $v)) (then (return (call $epath_byte (local.get $cont) (i32.const 0x30)))))
+    (local.set $div (i32.const 1000000000))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.eqz (local.get $div)))
+        (local.set $d (i32.div_u (local.get $v) (local.get $div)))
+        (if (i32.or (local.get $started) (local.get $d))
+          (then
+            (local.set $started (i32.const 1))
+            (if (i32.eqz (call $epath_byte (local.get $cont) (i32.add (i32.const 0x30) (local.get $d)))) (then (return (i32.const 0))))))
+        (local.set $v (i32.rem_u (local.get $v) (local.get $div)))
+        (local.set $div (i32.div_u (local.get $div) (i32.const 10)))
+        (br $loop)))
+    (i32.const 1))
+
+  ;; Render the current instance path as a JSON pointer into the error-path
+  ;; region. Returns (offset, bytes) or (0, -1) when the region is full.
+  (func $render_path (param $cont i32) (result i32 i32)
+    (local $start i32) (local $count i32) (local $i i32) (local $entry i32) (local $doc i32)
+    (local.set $start (call $ch (local.get $cont) (global.get $CH_ERROR_PATH_CURSOR)))
+    (local.set $count (call $ch (local.get $cont) (global.get $CH_PATH_COUNT)))
+    (local.set $doc (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS)))
+    (local.set $i (i32.const 0))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $entry (i32.add (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_PATH_OFFSET)))
+                                   (i32.mul (local.get $i) (global.get $PATH_ENTRY_SIZE))))
+        (if (i32.eqz (call $epath_byte (local.get $cont) (i32.const 0x2f))) (then (return (i32.const 0) (i32.const -1))))
+        (if (i32.load (local.get $entry))
+          (then
+            (if (i32.eqz (call $epath_decimal (local.get $cont) (i32.load offset=4 (local.get $entry))))
+              (then (return (i32.const 0) (i32.const -1)))))
+          (else
+            (if (i32.eqz (call $epath_bytes (local.get $cont) (i32.add (local.get $doc) (i32.load offset=4 (local.get $entry)))
+                                            (i32.load offset=8 (local.get $entry)) (i32.const 1)))
+              (then (return (i32.const 0) (i32.const -1))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (local.get $start) (i32.sub (call $ch (local.get $cont) (global.get $CH_ERROR_PATH_CURSOR)) (local.get $start)))
+
+  ;; Copy document text (a key) into the error-path region for a TEXT
+  ;; param. Returns the region offset or -1.
+  (func $epath_text (param $cont i32) (param $addr i32) (param $len i32) (result i32)
+    (local $start i32)
+    (local.set $start (call $ch (local.get $cont) (global.get $CH_ERROR_PATH_CURSOR)))
+    (if (i32.eqz (call $epath_bytes (local.get $cont) (local.get $addr) (local.get $len) (i32.const 0)))
+      (then (return (i32.const -1))))
+    (local.get $start))
+
+  ;; Record an error. Returns 1 when the run must abort (TEST mode, outside
+  ;; any trial): RESULT is already INVALID and PHASE is COMPLETE.
+  (func $push_error (param $cont i32) (param $keyword i32) (param $node i32) (param $param_kind i32)
+                    (param $a i32) (param $b i32) (param $c i32) (result i32)
+    (local $count i32) (local $stored i32) (local $record i32) (local $path_off i32) (local $path_len i32)
+    (local $saved_cursor i32)
+    (local.set $count (call $ch (local.get $cont) (global.get $CH_ERROR_COUNT)))
+    (call $ch_set (local.get $cont) (global.get $CH_ERROR_COUNT) (i32.add (local.get $count) (i32.const 1)))
+    (if (i32.eq (call $ch (local.get $cont) (global.get $CH_MODE)) (global.get $MODE_TEST))
+      (then
+        (if (i32.eqz (call $ch (local.get $cont) (global.get $CH_TRIAL_DEPTH)))
+          (then
+            (if (call $ch (local.get $cont) (global.get $CH_ROUTE_COUNT))
+              (then
+                (call $ch_set (local.get $cont) (global.get $CH_ROUTE_ABORT) (i32.const 1))
+                (return (i32.const 1))))
+            (call $ch_set (local.get $cont) (global.get $CH_PHASE) (global.get $PHASE_COMPLETE))
+            (call $ch_set (local.get $cont) (global.get $CH_RESULT) (global.get $STATUS_INVALID))
+            (return (i32.const 1))))
+        (return (i32.const 0))))
+    (local.set $stored (call $ch (local.get $cont) (global.get $CH_ERROR_STORED)))
+    (if (i32.ge_u (local.get $stored) (call $ch (local.get $cont) (global.get $CH_ERROR_CAPACITY)))
+      (then (return (i32.const 0))))
+    (local.set $saved_cursor (call $ch (local.get $cont) (global.get $CH_ERROR_PATH_CURSOR)))
+    (call $render_path (local.get $cont))
+    (local.set $path_len)
+    (local.set $path_off)
+    (if (i32.lt_s (local.get $path_len) (i32.const 0))
+      (then
+        ;; no room for the path text: drop the record, keep the count honest
+        (call $ch_set (local.get $cont) (global.get $CH_ERROR_PATH_CURSOR) (local.get $saved_cursor))
+        (return (i32.const 0))))
+    (local.set $record (i32.add (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_ERRORS_OFFSET)))
+                                (i32.mul (local.get $stored) (global.get $ERROR_SIZE))))
+    (i32.store16 (local.get $record) (local.get $keyword))
+    (i32.store16 offset=2 (local.get $record) (local.get $param_kind))
+    (i32.store offset=4 (local.get $record) (local.get $node))
+    (i32.store offset=8 (local.get $record) (local.get $path_off))
+    (i32.store offset=12 (local.get $record) (local.get $path_len))
+    (i32.store offset=16 (local.get $record) (local.get $a))
+    (i32.store offset=20 (local.get $record) (local.get $b))
+    (i32.store offset=24 (local.get $record) (local.get $c))
+    (i32.store offset=28 (local.get $record) (i32.const 0))
+    (call $ch_set (local.get $cont) (global.get $CH_ERROR_STORED) (i32.add (local.get $stored) (i32.const 1)))
+    (i32.const 0))
+
+  ;; Error accessors for hosts that prefer calls over header offsets.
+  (func $error_count (export "error_count") (param $cont i32) (result i32)
+    (call $ch (local.get $cont) (global.get $CH_ERROR_COUNT)))
+  (func $error_stored (export "error_stored") (param $cont i32) (result i32)
+    (call $ch (local.get $cont) (global.get $CH_ERROR_STORED)))
+  (func $error_record (export "error_record") (param $cont i32) (param $index i32) (result i32)
+    (i32.add (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_ERRORS_OFFSET)))
+             (i32.mul (local.get $index) (global.get $ERROR_SIZE))))
+  (func $error_path_base (export "error_path_base") (param $cont i32) (result i32)
+    (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_ERROR_PATH_OFFSET))))
+  (func $validation_result (export "validation_result") (param $cont i32) (result i32)
+    (call $ch (local.get $cont) (global.get $CH_RESULT)))
+  (func $validation_fuel_charged (export "validation_fuel_charged") (param $cont i32) (result i32)
+    (call $ch (local.get $cont) (global.get $CH_FUEL_CHARGED)))
+
+  ;; ==========================================================================
+  ;; Validator VM. Each step is atomic: it either finishes an instruction /
+  ;; element visit or pushes one child frame, so a pause between steps
+  ;; loses nothing. Steps return 0 to continue or a terminal status.
+  ;; ==========================================================================
+
+  (func $charge (param $cont i32) (param $n i32)
+    (call $work_add (local.get $n)))
+
+  (func $finish (param $cont i32) (param $status i32) (result i32)
+    (call $ch_set (local.get $cont) (global.get $CH_PHASE) (global.get $PHASE_COMPLETE))
+    (call $ch_set (local.get $cont) (global.get $CH_RESULT) (local.get $status))
+    (local.get $status))
+
+  (func $doc_size (param $cont i32) (param $value i32) (result i32)
+    (local $end i32) (local $next i32)
+    (local.set $end (i32.add (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS))
+                             (call $ch (local.get $cont) (global.get $CH_DOCUMENT_BYTES))))
+    (local.set $next (call $mp_skip (local.get $value) (local.get $end)))
+    (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (i32.const -1))))
+    (i32.sub (local.get $next) (local.get $value)))
+
+  ;; Hash-table lookup in an object table. Returns the entry address or 0.
+  (func $table_lookup (param $program i32) (param $table i32) (param $key i32) (param $klen i32) (param $hash i32) (result i32)
+    (local $cap i32) (local $entries i32) (local $slot i32) (local $entry i32) (local $keyrec i32) (local $probes i32)
+    (local.set $cap (i32.load offset=4 (local.get $table)))
+    (if (i32.eqz (local.get $cap)) (then (return (i32.const 0))))
+    (local.set $entries (i32.add (local.get $program) (i32.load offset=8 (local.get $table))))
+    (local.set $slot (i32.and (local.get $hash) (i32.sub (local.get $cap) (i32.const 1))))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $probes) (local.get $cap)))
+        (local.set $entry (i32.add (local.get $entries) (i32.mul (local.get $slot) (global.get $OE_SIZE))))
+        (local.set $keyrec (i32.load offset=4 (local.get $entry)))
+        (if (i32.eq (local.get $keyrec) (global.get $NONE)) (then (return (i32.const 0))))
+        (if (i32.eq (i32.load (local.get $entry)) (local.get $hash))
+          (then
+            (if (i32.eq (i32.load (i32.add (local.get $program) (local.get $keyrec))) (local.get $klen))
+              (then
+                (if (call $bytes_equal (i32.add (i32.add (local.get $program) (local.get $keyrec)) (i32.const 4))
+                                       (local.get $key) (local.get $klen))
+                  (then (return (local.get $entry))))))))
+        (local.set $slot (i32.and (i32.add (local.get $slot) (i32.const 1)) (i32.sub (local.get $cap) (i32.const 1))))
+        (local.set $probes (i32.add (local.get $probes) (i32.const 1)))
+        (br $loop)))
+    (i32.const 0))
+
+  (func $bits_or (param $cont i32) (param $dst i32) (param $src i32) (param $count i32)
+    (local $words i32) (local $i i32) (local $d i32) (local $s i32)
+    (local.set $words (i32.shr_u (i32.add (local.get $count) (i32.const 31)) (i32.const 5)))
+    (local.set $d (call $arena_addr (local.get $cont) (local.get $dst)))
+    (local.set $s (call $arena_addr (local.get $cont) (local.get $src)))
+    (block $done (loop $l
+        (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $words)))
+      (i32.store (i32.add (local.get $d) (i32.shl (local.get $i) (i32.const 2)))
+        (i32.or (i32.load (i32.add (local.get $d) (i32.shl (local.get $i) (i32.const 2))))
+                (i32.load (i32.add (local.get $s) (i32.shl (local.get $i) (i32.const 2))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    )
+
+  (func $bit_test (param $cont i32) (param $arena_off i32) (param $bit i32) (result i32)
+    (i32.and
+      (i32.shr_u
+        (i32.load (i32.add (call $arena_addr (local.get $cont) (local.get $arena_off)) (i32.shl (i32.shr_u (local.get $bit) (i32.const 5)) (i32.const 2))))
+        (i32.and (local.get $bit) (i32.const 31)))
+      (i32.const 1)))
+
+  (func $bit_set (param $cont i32) (param $arena_off i32) (param $bit i32)
+    (local $addr i32)
+    (local.set $addr (i32.add (call $arena_addr (local.get $cont) (local.get $arena_off)) (i32.shl (i32.shr_u (local.get $bit) (i32.const 5)) (i32.const 2))))
+    (i32.store (local.get $addr) (i32.or (i32.load (local.get $addr)) (i32.shl (i32.const 1) (i32.and (local.get $bit) (i32.const 31))))))
+
+  ;; Start a regex match of the string payload at document offset $input
+  ;; (length $len) against the regex record at pool offset $record. The
+  ;; parent gets FF_REGEX_PENDING and reads CHILD_RESULT when it resumes.
+  (func $push_regex (param $cont i32) (param $parent i32) (param $record i32) (param $input i32) (param $len i32) (result i32)
+    (local $frame i32)
+    (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_REGEX) (call $fr (local.get $parent) (global.get $F_NODE)) (local.get $input) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (local.set $frame (call $top_frame (local.get $cont)))
+    (call $fr_set (local.get $frame) (global.get $F_AUX) (local.get $record))
+    (call $fr_set (local.get $frame) (global.get $F_CURSOR) (local.get $len))
+    (call $fr_set (local.get $parent) (global.get $F_FLAGS)
+      (i32.or (call $fr (local.get $parent) (global.get $F_FLAGS)) (global.get $FF_REGEX_PENDING)))
+    (i32.const 1))
+
+  (func $step_regex (param $cont i32) (param $frame i32) (result i32)
+    (local $program i32) (local $doc i32) (local $rc i32) (local $rcap i32) (local $record i32) (local $status i32) (local $fuel i32) (local $grant i32)
+    (local $count i32) (local $parent i32)
+    (local $regex_before i64)
+    (local.set $program (call $ch (local.get $cont) (global.get $CH_PROGRAM_ADDRESS)))
+    (local.set $doc (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS)))
+    (local.set $rc (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_REGEX_OFFSET))))
+    (local.set $rcap (call $ch (local.get $cont) (global.get $CH_REGEX_CAPACITY)))
+    (local.set $record (i32.add (local.get $program) (call $fr (local.get $frame) (global.get $F_AUX))))
+    (if (i32.eqz (call $fr (local.get $frame) (global.get $F_INDEX)))
+      (then
+        (call $charge (local.get $cont) (i32.const 1))
+        (local.set $status (call $regex_initialize_match
+          (i32.add (local.get $record) (i32.const 8)) (i32.load (local.get $record))
+          (i32.add (local.get $doc) (call $fr (local.get $frame) (global.get $F_VALUE))) (call $fr (local.get $frame) (global.get $F_CURSOR))
+          (i32.const 0) (i32.const 0) (local.get $rc) (local.get $rcap)))
+        (call $work_regex (i64.const 0) (call $regex_match_work_charged (local.get $rc)) (call $regex_match_work_overflow (local.get $rc)))
+        (if (i32.eq (local.get $status) (global.get $REGEX_STATUS_INVALID_UTF8)) (then (return (global.get $STATUS_INVALID_UTF8))))
+        (if (i32.ne (local.get $status) (global.get $REGEX_STATUS_OK)) (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+        (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.const 1))
+        (return (i32.const 0))))
+    (local.set $grant (call $ch (local.get $cont) (global.get $CH_GRANT)))
+    (if (i32.le_s (local.get $grant) (i32.const 0)) (then (local.set $grant (i32.const 1))))
+    (local.set $regex_before (call $regex_match_work_charged (local.get $rc)))
+    (call $regex_run_match (local.get $rc) (local.get $rcap) (local.get $grant))
+    (local.set $fuel)
+    (local.set $status)
+    (call $work_regex (local.get $regex_before) (call $regex_match_work_charged (local.get $rc)) (call $regex_match_work_overflow (local.get $rc)))
+    (if (i32.eq (local.get $status) (global.get $REGEX_STATUS_PAUSED)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $status) (global.get $REGEX_STATUS_INVALID_UTF8)) (then (return (global.get $STATUS_INVALID_UTF8))))
+    (if (i32.and (i32.ne (local.get $status) (global.get $REGEX_STATUS_MATCH)) (i32.ne (local.get $status) (global.get $REGEX_STATUS_NO_MATCH)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    ;; pop without error accounting; the parent reads the verdict
+    (local.set $count (i32.sub (call $ch (local.get $cont) (global.get $CH_FRAME_COUNT)) (i32.const 1)))
+    (call $ch_set (local.get $cont) (global.get $CH_FRAME_COUNT) (local.get $count))
+    (local.set $parent (call $frame_at (local.get $cont) (i32.sub (local.get $count) (i32.const 1))))
+    (call $fr_set (local.get $parent) (global.get $F_CHILD_RESULT) (i32.eq (local.get $status) (global.get $REGEX_STATUS_MATCH)))
+    (i32.const 0))
+
+  ;; $dynamicRef: the outermost resource in the dynamic scope (the frame
+  ;; stack, bottom first) declaring the anchor wins; else the lexical target.
+  (func $dynamic_target (param $cont i32) (param $lexical i32) (param $name i32) (result i32)
+    (local $program i32) (local $i i32) (local $count i32) (local $frame i32) (local $res i32) (local $table i32) (local $list i32) (local $n i32) (local $j i32)
+    (local $nlen i32) (local $entry i32) (local $cand i32)
+    (local.set $program (call $ch (local.get $cont) (global.get $CH_PROGRAM_ADDRESS)))
+    (local.set $table (i32.add (local.get $program) (call $ph (local.get $program) (global.get $PH_RESOURCE_TABLE_OFFSET))))
+    (local.set $nlen (i32.load (i32.add (local.get $program) (local.get $name))))
+    (local.set $count (call $ch (local.get $cont) (global.get $CH_FRAME_COUNT)))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $frame (call $frame_at (local.get $cont) (local.get $i)))
+      (local.set $res (i32.shr_u (i32.load offset=12 (call $node_addr (local.get $program) (call $fr (local.get $frame) (global.get $F_NODE)))) (i32.const 16)))
+      (if (i32.lt_u (local.get $res) (call $ph (local.get $program) (global.get $PH_RESOURCE_COUNT)))
+        (then
+          (local.set $list (i32.add (local.get $program) (i32.load offset=4 (i32.add (local.get $table) (i32.shl (local.get $res) (i32.const 3))))))
+          (local.set $n (i32.load (local.get $list)))
+          (local.set $j (i32.const 0))
+          (block $ad (loop $al
+            (call $work_add (i32.const 1))
+            (br_if $ad (i32.ge_u (local.get $j) (local.get $n)))
+            (local.set $entry (i32.add (local.get $list) (i32.add (i32.const 4) (i32.shl (local.get $j) (i32.const 3)))))
+            (local.set $cand (i32.add (local.get $program) (i32.load (local.get $entry))))
+            (if (i32.eq (i32.load (local.get $cand)) (local.get $nlen))
+              (then
+                (if (call $bytes_equal (i32.add (local.get $cand) (i32.const 4)) (i32.add (i32.add (local.get $program) (local.get $name)) (i32.const 4)) (local.get $nlen))
+                  (then (return (i32.load offset=4 (local.get $entry)))))))
+            (local.set $j (i32.add (local.get $j) (i32.const 1)))
+            (br $al)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (local.get $lexical))
+
+  ;; One instruction of a NODE frame.
+  (func $step_node (param $cont i32) (param $frame i32) (result i32)
+    (local $program i32) (local $doc i32) (local $doc_end i32) (local $node i32)
+    (local $pc i32) (local $op i32) (local $a i32) (local $b i32) (local $c i32)
+    (local $value i32) (local $voff i32) (local $kind i32) (local $h i32) (local $n i32)
+    (local $rec i32) (local $r i32) (local $size i32) (local $hash i32) (local $i i32) (local $count i32)
+    (local $cmp i32) (local $table i32) (local $arena i32) (local $cap i32) (local $child i32)
+    (local.set $program (call $ch (local.get $cont) (global.get $CH_PROGRAM_ADDRESS)))
+    (local.set $doc (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS)))
+    (local.set $doc_end (i32.add (local.get $doc) (call $ch (local.get $cont) (global.get $CH_DOCUMENT_BYTES))))
+    (local.set $node (call $fr (local.get $frame) (global.get $F_NODE)))
+    (local.set $pc (call $fr (local.get $frame) (global.get $F_PC)))
+    (local.set $op (i32.load (i32.add (local.get $program) (local.get $pc))))
+    ;; a PATTERN instruction re-enters here after its regex child finished
+    (if (i32.and (call $fr (local.get $frame) (global.get $F_FLAGS)) (global.get $FF_REGEX_PENDING))
+      (then
+        (call $fr_set (local.get $frame) (global.get $F_FLAGS)
+          (i32.and (call $fr (local.get $frame) (global.get $F_FLAGS)) (i32.xor (global.get $FF_REGEX_PENDING) (i32.const -1))))
+        (call $fr_set (local.get $frame) (global.get $F_PC) (i32.add (local.get $pc) (global.get $INSTRUCTION_SIZE)))
+        (if (i32.eqz (call $fr (local.get $frame) (global.get $F_CHILD_RESULT)))
+          (then
+            (local.set $a (i32.load offset=4 (i32.add (local.get $program) (local.get $pc))))
+            (drop (call $push_error (local.get $cont) (global.get $KW_PATTERN) (local.get $node) (global.get $PK_POOL_STRING)
+                                    (i32.load offset=4 (i32.add (local.get $program) (local.get $a))) (i32.const 0) (i32.const 0)))))
+        (return (i32.const 0))))
+    (local.set $a (i32.load offset=4 (i32.add (local.get $program) (local.get $pc))))
+    (local.set $b (i32.load offset=8 (i32.add (local.get $program) (local.get $pc))))
+    (local.set $c (i32.load offset=12 (i32.add (local.get $program) (local.get $pc))))
+    (call $fr_set (local.get $frame) (global.get $F_PC) (i32.add (local.get $pc) (global.get $INSTRUCTION_SIZE)))
+    (call $charge (local.get $cont) (i32.const 1))
+    (local.set $voff (call $fr (local.get $frame) (global.get $F_VALUE)))
+    (local.set $value (i32.add (local.get $doc) (local.get $voff)))
+    (call $mp_header (local.get $value) (local.get $doc_end)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.eq (local.get $kind) (global.get $K_INVALID)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_END))
+      (then (call $pop_frame (local.get $cont)) (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_FAIL))
+      (then
+        (drop (call $push_error (local.get $cont) (global.get $KW_FALSE) (local.get $node) (global.get $PK_NONE) (i32.const 0) (i32.const 0) (i32.const 0)))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_TYPE))
+      (then
+        (local.set $r (call $mp_type_mask (local.get $value) (local.get $doc_end)))
+        (if (i32.and (i32.ne (i32.and (local.get $a) (i32.const 128)) (i32.const 0)) (i32.eq (local.get $kind) (global.get $K_FLOAT)))
+          (then (local.set $r (i32.and (local.get $r) (i32.xor (global.get $T_INTEGER) (i32.const -1))))))
+        (if (i32.eqz (i32.and (local.get $r) (local.get $a)))
+          (then (drop (call $push_error (local.get $cont) (global.get $KW_TYPE) (local.get $node) (global.get $PK_TYPE_MASK) (local.get $a) (i32.const 0) (i32.const 0)))))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_CONST))
+      (then
+        (local.set $size (call $doc_size (local.get $cont) (local.get $value)))
+        (if (i32.lt_s (local.get $size) (i32.const 0)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+        (local.set $rec (i32.add (local.get $program) (local.get $a)))
+        (local.set $r (call $mp_equal (local.get $value) (local.get $doc_end)
+                                      (i32.add (local.get $rec) (i32.const 8))
+                                      (i32.add (i32.add (local.get $rec) (i32.const 8)) (i32.load (local.get $rec)))
+                                      (i32.const 0)))
+        (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (if (i32.eqz (local.get $r))
+          (then (drop (call $push_error (local.get $cont) (global.get $KW_CONST) (local.get $node) (global.get $PK_POOL_VALUE) (local.get $a) (i32.const 0) (i32.const 0)))))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_ENUM))
+      (then
+        (local.set $size (call $doc_size (local.get $cont) (local.get $value)))
+        (if (i32.lt_s (local.get $size) (i32.const 0)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+        (local.set $hash (call $mp_hash (local.get $value) (local.get $doc_end) (i32.const 0)))
+        (local.set $count (i32.load (i32.add (local.get $program) (local.get $a))))
+        (local.set $i (i32.const 0))
+        (block $done
+          (loop $loop
+            (call $work_add (i32.const 1))
+            (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+            (local.set $rec (i32.add (local.get $program)
+              (i32.load (i32.add (i32.add (local.get $program) (local.get $a)) (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2)))))))
+            (if (i32.eq (i32.load offset=4 (local.get $rec)) (local.get $hash))
+              (then
+                (local.set $r (call $mp_equal (local.get $value) (local.get $doc_end)
+                                              (i32.add (local.get $rec) (i32.const 8))
+                                              (i32.add (i32.add (local.get $rec) (i32.const 8)) (i32.load (local.get $rec)))
+                                              (i32.const 0)))
+                (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                (if (local.get $r) (then (return (i32.const 0))))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $loop)))
+        (drop (call $push_error (local.get $cont) (global.get $KW_ENUM) (local.get $node) (global.get $PK_POOL_VALUE) (local.get $a) (i32.const 0) (i32.const 0)))
+        (return (i32.const 0))))
+
+    ;; numeric keywords apply to numbers only
+    (if (i32.and (i32.ge_u (local.get $op) (global.get $OP_MINIMUM)) (i32.le_u (local.get $op) (global.get $OP_MULTIPLE_OF)))
+      (then
+        (if (i32.eqz (i32.or (i32.eq (local.get $kind) (global.get $K_INT)) (i32.eq (local.get $kind) (global.get $K_FLOAT))))
+          (then (return (i32.const 0))))
+        (local.set $rec (i32.add (i32.add (local.get $program) (local.get $a)) (i32.const 8)))
+        (if (i32.eq (local.get $op) (global.get $OP_MULTIPLE_OF))
+          (then
+            (if (i32.eqz (call $num_multiple_of (local.get $value) (local.get $rec)))
+              (then (drop (call $push_error (local.get $cont) (global.get $KW_MULTIPLE_OF) (local.get $node) (global.get $PK_POOL_VALUE) (local.get $a) (i32.const 0) (i32.const 0)))))
+            (return (i32.const 0))))
+        (local.set $cmp (call $num_cmp (local.get $value) (local.get $rec)))
+        (local.set $r (i32.const 1))
+        (if (i32.eq (local.get $cmp) (i32.const 2)) (then (local.set $r (i32.const 0))))
+        (if (i32.eq (local.get $op) (global.get $OP_MINIMUM))
+          (then (if (i32.eq (local.get $cmp) (i32.const -1)) (then (local.set $r (i32.const 0))))
+                (local.set $b (global.get $KW_MINIMUM))))
+        (if (i32.eq (local.get $op) (global.get $OP_EXCLUSIVE_MINIMUM))
+          (then (if (i32.le_s (local.get $cmp) (i32.const 0)) (then (local.set $r (i32.const 0))))
+                (local.set $b (global.get $KW_EXCLUSIVE_MINIMUM))))
+        (if (i32.eq (local.get $op) (global.get $OP_MAXIMUM))
+          (then (if (i32.eq (local.get $cmp) (i32.const 1)) (then (local.set $r (i32.const 0))))
+                (local.set $b (global.get $KW_MAXIMUM))))
+        (if (i32.eq (local.get $op) (global.get $OP_EXCLUSIVE_MAXIMUM))
+          (then (if (i32.and (i32.ge_s (local.get $cmp) (i32.const 0)) (i32.ne (local.get $cmp) (i32.const 2))) (then (local.set $r (i32.const 0))))
+                (local.set $b (global.get $KW_EXCLUSIVE_MAXIMUM))))
+        (if (i32.eqz (local.get $r))
+          (then (drop (call $push_error (local.get $cont) (local.get $b) (local.get $node) (global.get $PK_POOL_VALUE) (local.get $a) (i32.const 0) (i32.const 0)))))
+        (return (i32.const 0))))
+
+    (if (i32.or (i32.eq (local.get $op) (global.get $OP_MIN_LENGTH)) (i32.eq (local.get $op) (global.get $OP_MAX_LENGTH)))
+      (then
+        (if (i32.ne (local.get $kind) (global.get $K_STR)) (then (return (i32.const 0))))
+        (local.set $count (call $utf8_count (i32.add (local.get $value) (local.get $h)) (local.get $n)))
+        (if (i32.lt_s (local.get $count) (i32.const 0)) (then (return (global.get $STATUS_INVALID_UTF8))))
+        (if (i32.eq (local.get $op) (global.get $OP_MIN_LENGTH))
+          (then
+            (if (i32.lt_u (local.get $count) (local.get $a))
+              (then (drop (call $push_error (local.get $cont) (global.get $KW_MIN_LENGTH) (local.get $node) (global.get $PK_LIMIT) (local.get $a) (i32.const 0) (i32.const 0))))))
+          (else
+            (if (i32.gt_u (local.get $count) (local.get $a))
+              (then (drop (call $push_error (local.get $cont) (global.get $KW_MAX_LENGTH) (local.get $node) (global.get $PK_LIMIT) (local.get $a) (i32.const 0) (i32.const 0)))))))
+        (return (i32.const 0))))
+
+    (if (i32.or (i32.eq (local.get $op) (global.get $OP_MIN_ITEMS)) (i32.eq (local.get $op) (global.get $OP_MAX_ITEMS)))
+      (then
+        (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (i32.const 0))))
+        (if (i32.eq (local.get $op) (global.get $OP_MIN_ITEMS))
+          (then
+            (if (i32.lt_u (local.get $n) (local.get $a))
+              (then (drop (call $push_error (local.get $cont) (global.get $KW_MIN_ITEMS) (local.get $node) (global.get $PK_LIMIT) (local.get $a) (i32.const 0) (i32.const 0))))))
+          (else
+            (if (i32.gt_u (local.get $n) (local.get $a))
+              (then (drop (call $push_error (local.get $cont) (global.get $KW_MAX_ITEMS) (local.get $node) (global.get $PK_LIMIT) (local.get $a) (i32.const 0) (i32.const 0)))))))
+        (return (i32.const 0))))
+
+    (if (i32.or (i32.eq (local.get $op) (global.get $OP_MIN_PROPERTIES)) (i32.eq (local.get $op) (global.get $OP_MAX_PROPERTIES)))
+      (then
+        (if (i32.ne (local.get $kind) (global.get $K_MAP)) (then (return (i32.const 0))))
+        (if (i32.eq (local.get $op) (global.get $OP_MIN_PROPERTIES))
+          (then
+            (if (i32.lt_u (local.get $n) (local.get $a))
+              (then (drop (call $push_error (local.get $cont) (global.get $KW_MIN_PROPERTIES) (local.get $node) (global.get $PK_LIMIT) (local.get $a) (i32.const 0) (i32.const 0))))))
+          (else
+            (if (i32.gt_u (local.get $n) (local.get $a))
+              (then (drop (call $push_error (local.get $cont) (global.get $KW_MAX_PROPERTIES) (local.get $node) (global.get $PK_LIMIT) (local.get $a) (i32.const 0) (i32.const 0)))))))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_OBJECT_PASS))
+      (then
+        (if (i32.ne (local.get $kind) (global.get $K_MAP)) (then (return (i32.const 0))))
+        (local.set $table (i32.add (local.get $program) (local.get $a)))
+        (local.set $arena (call $arena_alloc (local.get $cont)
+          (i32.shl (i32.shr_u (i32.add (i32.load offset=12 (local.get $table)) (i32.const 31)) (i32.const 5)) (i32.const 2))))
+        (if (i32.lt_s (local.get $arena) (i32.const 0)) (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_OBJECT_PASS) (local.get $node) (local.get $voff) (i32.const 0)))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (local.set $frame (call $top_frame (local.get $cont)))
+        (call $fr_set (local.get $frame) (global.get $F_AUX) (local.get $a))
+        (call $fr_set (local.get $frame) (global.get $F_AUX2) (local.get $arena))
+        (call $fr_set (local.get $frame) (global.get $F_COUNT) (local.get $n))
+        (call $fr_set (local.get $frame) (global.get $F_CURSOR) (i32.add (local.get $voff) (local.get $h)))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_ARRAY_PASS))
+      (then
+        (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (i32.const 0))))
+        (local.set $table (i32.add (local.get $program) (local.get $a)))
+        (local.set $arena (i32.const 0))
+        (local.set $cap (i32.const 0))
+        (if (i32.load offset=24 (local.get $table))
+          (then
+            (local.set $cap (i32.const 8))
+            (block $cap_done
+              (loop $cap_loop
+                (call $work_add (i32.const 1))
+                (br_if $cap_done (i32.ge_u (local.get $cap) (i32.shl (local.get $n) (i32.const 1))))
+                (local.set $cap (i32.shl (local.get $cap) (i32.const 1)))
+                (br $cap_loop)))
+            (local.set $arena (call $arena_alloc (local.get $cont) (i32.mul (local.get $cap) (global.get $UNIQUE_ENTRY_SIZE))))
+            (if (i32.lt_s (local.get $arena) (i32.const 0)) (then (return (global.get $STATUS_LIMIT_EXCEEDED))))))
+        (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_ARRAY_PASS) (local.get $node) (local.get $voff) (i32.const 0)))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (local.set $frame (call $top_frame (local.get $cont)))
+        (call $fr_set (local.get $frame) (global.get $F_AUX) (local.get $a))
+        (call $fr_set (local.get $frame) (global.get $F_AUX2) (local.get $arena))
+        (call $fr_set (local.get $frame) (global.get $F_PC) (local.get $cap))
+        (call $fr_set (local.get $frame) (global.get $F_COUNT) (local.get $n))
+        (call $fr_set (local.get $frame) (global.get $F_CURSOR) (i32.add (local.get $voff) (local.get $h)))
+        (return (i32.const 0))))
+
+    (if (i32.or (i32.eq (local.get $op) (global.get $OP_ALL_OF))
+                (i32.or (i32.eq (local.get $op) (global.get $OP_ANY_OF)) (i32.eq (local.get $op) (global.get $OP_ONE_OF))))
+      (then
+        (local.set $kind (global.get $FK_ALL_OF))
+        (if (i32.eq (local.get $op) (global.get $OP_ANY_OF)) (then (local.set $kind (global.get $FK_ANY_OF))))
+        (if (i32.eq (local.get $op) (global.get $OP_ONE_OF)) (then (local.set $kind (global.get $FK_ONE_OF))))
+        (if (i32.eqz (call $push_frame (local.get $cont) (local.get $kind) (local.get $node) (local.get $voff) (i32.const 0)))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (local.set $frame (call $top_frame (local.get $cont)))
+        (call $fr_set (local.get $frame) (global.get $F_AUX) (local.get $a))
+        (call $fr_set (local.get $frame) (global.get $F_COUNT) (i32.load (i32.add (local.get $program) (local.get $a))))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_NOT))
+      (then
+        (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NOT) (local.get $node) (local.get $voff) (i32.const 0)))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (call $fr_set (call $top_frame (local.get $cont)) (global.get $F_AUX) (local.get $a))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_IF))
+      (then
+        (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_IF) (local.get $node) (local.get $voff) (i32.const 0)))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (local.set $frame (call $top_frame (local.get $cont)))
+        (call $fr_set (local.get $frame) (global.get $F_AUX) (local.get $a))
+        (call $fr_set (local.get $frame) (global.get $F_AUX2) (local.get $b))
+        (call $fr_set (local.get $frame) (global.get $F_AUX3) (local.get $c))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_REF))
+      (then
+        (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $a) (local.get $voff) (i32.const 0)))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_DYNAMIC_REF))
+      (then
+        (local.set $child (call $dynamic_target (local.get $cont) (local.get $a) (local.get $b)))
+        (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $child) (local.get $voff) (i32.const 0)))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (return (i32.const 0))))
+
+    (if (i32.or (i32.eq (local.get $op) (global.get $OP_UNEVALUATED_PROPERTIES)) (i32.eq (local.get $op) (global.get $OP_UNEVALUATED_ITEMS)))
+      (then
+        (if (i32.ne (local.get $kind) (select (global.get $K_MAP) (global.get $K_ARRAY) (i32.eq (local.get $op) (global.get $OP_UNEVALUATED_PROPERTIES))))
+          (then (return (i32.const 0))))
+        (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_UNEVAL) (local.get $node) (local.get $voff) (i32.const 0)))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (local.set $frame (call $top_frame (local.get $cont)))
+        (call $fr_set (local.get $frame) (global.get $F_AUX) (local.get $a))
+        (call $fr_set (local.get $frame) (global.get $F_AUX2) (i32.eq (local.get $op) (global.get $OP_UNEVALUATED_PROPERTIES)))
+        (call $fr_set (local.get $frame) (global.get $F_COUNT) (local.get $n))
+        (call $fr_set (local.get $frame) (global.get $F_CURSOR) (i32.add (local.get $voff) (local.get $h)))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_FORMAT))
+      (then
+        (if (i32.ne (local.get $kind) (global.get $K_STR)) (then (return (i32.const 0))))
+        (if (i32.eq (local.get $a) (global.get $FMT_REGEX))
+          (then (local.set $r (call $fmt_regex (local.get $cont) (i32.add (local.get $value) (local.get $h)) (local.get $n))))
+          (else
+            (local.set $arena (call $arena_alloc (local.get $cont) (i32.const 1024)))
+            (if (i32.lt_s (local.get $arena) (i32.const 0)) (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+            (local.set $r (call $format_check (local.get $cont) (local.get $a) (i32.add (local.get $value) (local.get $h)) (local.get $n)
+                                              (call $arena_addr (local.get $cont) (local.get $arena))))
+            (call $ch_set (local.get $cont) (global.get $CH_ARENA_CURSOR) (local.get $arena))))
+        (if (i32.eq (local.get $r) (global.get $FORMAT_NEEDS_IDNA)) (then (return (global.get $STATUS_UNSUPPORTED))))
+        (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $r)))))
+        (if (i32.gt_s (local.get $r) (i32.const 1)) (then (return (local.get $r))))
+        (if (i32.eqz (local.get $r))
+          (then (drop (call $push_error (local.get $cont) (global.get $KW_FORMAT) (local.get $node) (global.get $PK_LIMIT) (local.get $a) (i32.const 0) (i32.const 0)))))
+        (return (i32.const 0))))
+
+    (if (i32.eq (local.get $op) (global.get $OP_PATTERN))
+      (then
+        (if (i32.ne (local.get $kind) (global.get $K_STR)) (then (return (i32.const 0))))
+        ;; stay on this instruction; the verdict is consumed on re-entry
+        (call $fr_set (local.get $frame) (global.get $F_PC) (local.get $pc))
+        (if (i32.eqz (call $push_regex (local.get $cont) (local.get $frame) (local.get $a) (i32.add (local.get $voff) (local.get $h)) (local.get $n)))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+        (return (i32.const 0))))
+
+    (global.get $STATUS_CORRUPT_PROGRAM))
+
+  ;; One pair (or one post-pass step) of an OBJECT_PASS frame.
+  (func $step_object (param $cont i32) (param $frame i32) (result i32)
+    (local $program i32) (local $doc i32) (local $doc_end i32) (local $node i32) (local $table i32)
+    (local $index i32) (local $count i32) (local $step i32) (local $cursor i32)
+    (local $kk i32) (local $kh i32) (local $klen i32) (local $key i32) (local $value i32) (local $voff i32)
+    (local $entry i32) (local $child i32) (local $additional i32) (local $text i32) (local $next i32)
+    (local $list i32) (local $i i32) (local $n i32) (local $dep i32) (local $cap i32) (local $entries i32)
+    (local $dep_count i32) (local $dep_entry i32) (local $kw i32) (local $pcount i32) (local $pi i32) (local $plist i32)
+    (local.set $program (call $ch (local.get $cont) (global.get $CH_PROGRAM_ADDRESS)))
+    (local.set $doc (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS)))
+    (local.set $doc_end (i32.add (local.get $doc) (call $ch (local.get $cont) (global.get $CH_DOCUMENT_BYTES))))
+    (local.set $node (call $fr (local.get $frame) (global.get $F_NODE)))
+    (local.set $table (i32.add (local.get $program) (call $fr (local.get $frame) (global.get $F_AUX))))
+    (local.set $index (call $fr (local.get $frame) (global.get $F_INDEX)))
+    (local.set $count (call $fr (local.get $frame) (global.get $F_COUNT)))
+    (local.set $step (call $frame_step (local.get $frame)))
+    (if (i32.lt_u (local.get $index) (local.get $count))
+      (then
+        (local.set $cursor (i32.add (local.get $doc) (call $fr (local.get $frame) (global.get $F_CURSOR))))
+        (call $mp_header (local.get $cursor) (local.get $doc_end)) (local.set $klen) (local.set $kh) (local.set $kk)
+        (if (i32.ne (local.get $kk) (global.get $K_STR)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+        (local.set $key (i32.add (local.get $cursor) (local.get $kh)))
+        (local.set $value (i32.add (local.get $key) (local.get $klen)))
+        (local.set $voff (i32.sub (local.get $value) (local.get $doc)))
+        (if (i32.ge_u (local.get $value) (local.get $doc_end)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+        (if (i32.eqz (local.get $step))
+          (then
+            (call $charge (local.get $cont) (i32.const 1))
+            (local.set $entry (call $table_lookup (local.get $program) (local.get $table) (local.get $key) (local.get $klen)
+                                                  (call $fnv1a (local.get $key) (local.get $klen))))
+            (call $fr_set (local.get $frame) (global.get $F_AUX3) (local.get $entry))
+            (call $frame_set_step (local.get $frame) (i32.const 1))
+            (if (local.get $entry)
+              (then
+                (call $bit_set (local.get $cont) (call $fr (local.get $frame) (global.get $F_AUX2)) (i32.load offset=12 (local.get $entry)))
+                (local.set $child (i32.load offset=8 (local.get $entry)))
+                (if (i32.ne (local.get $child) (global.get $NONE))
+                  (then
+                    (call $mark_evaluated (local.get $cont) (call $pass_owner (local.get $cont)) (local.get $index))
+                    (call $push_path (local.get $cont) (i32.const 0) (i32.sub (local.get $key) (local.get $doc)) (local.get $klen))
+                    (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $child) (local.get $voff) (global.get $FF_PATH_PUSHED)))
+                      (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                    (return (i32.const 0))))))
+            (local.set $step (i32.const 1))))
+        (if (i32.eq (local.get $step) (i32.const 1))
+          (then
+            ;; patternProperties: one regex child per pattern, in order
+            (local.set $pcount (i32.load offset=28 (local.get $table)))
+            (local.set $pi (call $fr (local.get $frame) (global.get $F_PC)))
+            (if (i32.and (call $fr (local.get $frame) (global.get $F_FLAGS)) (global.get $FF_REGEX_PENDING))
+              (then
+                (call $fr_set (local.get $frame) (global.get $F_FLAGS)
+                  (i32.and (call $fr (local.get $frame) (global.get $F_FLAGS)) (i32.xor (global.get $FF_REGEX_PENDING) (i32.const -1))))
+                (local.set $plist (i32.add (local.get $program) (i32.load offset=32 (local.get $table))))
+                (call $fr_set (local.get $frame) (global.get $F_PC) (i32.add (local.get $pi) (i32.const 1)))
+                (if (call $fr (local.get $frame) (global.get $F_CHILD_RESULT))
+                  (then
+                    (call $fr_set (local.get $frame) (global.get $F_FLAGS) (i32.or (call $fr (local.get $frame) (global.get $F_FLAGS)) (global.get $FF_MATCHED)))
+                    (local.set $child (i32.load (i32.add (local.get $plist) (i32.add (i32.const 8) (i32.shl (local.get $pi) (i32.const 3))))))
+                    (call $mark_evaluated (local.get $cont) (call $pass_owner (local.get $cont)) (local.get $index))
+                    (call $push_path (local.get $cont) (i32.const 0) (i32.sub (local.get $key) (local.get $doc)) (local.get $klen))
+                    (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $child) (local.get $voff) (global.get $FF_PATH_PUSHED)))
+                      (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                    (return (i32.const 0))))
+                (local.set $pi (i32.add (local.get $pi) (i32.const 1)))))
+            (if (i32.lt_u (local.get $pi) (local.get $pcount))
+              (then
+                (local.set $plist (i32.add (local.get $program) (i32.load offset=32 (local.get $table))))
+                (call $fr_set (local.get $frame) (global.get $F_PC) (local.get $pi))
+                (if (i32.eqz (call $push_regex (local.get $cont) (local.get $frame)
+                      (i32.load (i32.add (local.get $plist) (i32.add (i32.const 4) (i32.shl (local.get $pi) (i32.const 3)))))
+                      (i32.sub (local.get $key) (local.get $doc)) (local.get $klen)))
+                  (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                (return (i32.const 0))))
+            (call $frame_set_step (local.get $frame) (i32.const 2))
+            (local.set $entry (call $fr (local.get $frame) (global.get $F_AUX3)))
+            (local.set $child (global.get $NONE))
+            (if (local.get $entry) (then (local.set $child (i32.load offset=8 (local.get $entry)))))
+            (if (i32.and (call $fr (local.get $frame) (global.get $F_FLAGS)) (global.get $FF_MATCHED)) (then (local.set $child (i32.const 0))))
+            (if (i32.eq (local.get $child) (global.get $NONE))
+              (then
+                (local.set $additional (i32.load offset=20 (local.get $table)))
+                (if (i32.ne (local.get $additional) (global.get $NONE))
+                  (then
+                    (if (i32.eq (local.get $additional) (global.get $FALSE_NODE))
+                      (then
+                        (local.set $text (i32.const -1))
+                        (if (i32.eq (call $ch (local.get $cont) (global.get $CH_MODE)) (global.get $MODE_VALIDATE))
+                          (then (local.set $text (call $epath_text (local.get $cont) (local.get $key) (local.get $klen)))))
+                        (drop (call $push_error (local.get $cont) (global.get $KW_ADDITIONAL_PROPERTIES) (local.get $node)
+                                                (global.get $PK_TEXT) (local.get $text) (local.get $klen) (i32.const 0)))
+                        (if (i32.eq (call $ch (local.get $cont) (global.get $CH_PHASE)) (global.get $PHASE_COMPLETE))
+                          (then (return (i32.const 0)))))
+                      (else
+                        (call $mark_evaluated (local.get $cont) (call $pass_owner (local.get $cont)) (local.get $index))
+                        (call $push_path (local.get $cont) (i32.const 0) (i32.sub (local.get $key) (local.get $doc)) (local.get $klen))
+                        (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $additional) (local.get $voff) (global.get $FF_PATH_PUSHED)))
+                          (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                        (return (i32.const 0))))))))
+            (local.set $step (i32.const 2))))
+        (if (i32.eq (local.get $step) (i32.const 2))
+          (then
+            (call $frame_set_step (local.get $frame) (i32.const 3))
+            (local.set $child (i32.load offset=24 (local.get $table)))
+            (if (i32.ne (local.get $child) (global.get $NONE))
+              (then
+                (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $child)
+                                               (i32.sub (local.get $cursor) (local.get $doc)) (i32.const 0)))
+                  (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                (return (i32.const 0))))
+            (local.set $step (i32.const 3))))
+        ;; step 3: advance to the next pair
+        (local.set $next (call $mp_skip (local.get $value) (local.get $doc_end)))
+        (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+        (call $fr_set (local.get $frame) (global.get $F_CURSOR) (i32.sub (local.get $next) (local.get $doc)))
+        (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.add (local.get $index) (i32.const 1)))
+        (call $fr_set (local.get $frame) (global.get $F_PC) (i32.const 0))
+        (call $fr_set (local.get $frame) (global.get $F_FLAGS)
+          (i32.and (call $fr (local.get $frame) (global.get $F_FLAGS)) (i32.xor (global.get $FF_MATCHED) (i32.const -1))))
+        (call $frame_set_step (local.get $frame) (i32.const 0))
+        (return (i32.const 0))))
+    ;; post pass
+    (if (i32.eqz (local.get $step))
+      (then
+        (call $frame_set_step (local.get $frame) (i32.const 1))
+        (call $fr_set (local.get $frame) (global.get $F_AUX3) (i32.const 0))
+        (local.set $list (i32.load offset=16 (local.get $table)))
+        (if (i32.ne (local.get $list) (global.get $NONE))
+          (then
+            (local.set $n (i32.load (i32.add (local.get $program) (local.get $list))))
+            (call $charge (local.get $cont) (i32.const 1))
+            (local.set $entries (i32.add (local.get $program) (i32.load offset=8 (local.get $table))))
+            (local.set $i (i32.const 0))
+            (block $done
+              (loop $loop
+                (call $work_add (i32.const 1))
+                (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+                (local.set $entry (i32.add (local.get $entries)
+                  (i32.mul (i32.load (i32.add (i32.add (local.get $program) (local.get $list)) (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2)))))
+                           (global.get $OE_SIZE))))
+                (if (i32.eqz (call $bit_test (local.get $cont) (call $fr (local.get $frame) (global.get $F_AUX2)) (i32.load offset=12 (local.get $entry))))
+                  (then
+                    (if (call $push_error (local.get $cont) (global.get $KW_REQUIRED) (local.get $node) (global.get $PK_POOL_STRING)
+                                          (i32.load offset=4 (local.get $entry)) (i32.const 0) (i32.const 0))
+                      (then (return (i32.const 0))))))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $loop))))
+          (else (call $charge (local.get $cont) (i32.const 1))))
+        (return (i32.const 0))))
+    ;; step 1: dependency scan over table slots
+    (local.set $cap (i32.load offset=4 (local.get $table)))
+    (local.set $entries (i32.add (local.get $program) (i32.load offset=8 (local.get $table))))
+    (local.set $i (call $fr (local.get $frame) (global.get $F_AUX3)))
+    (call $charge (local.get $cont) (i32.const 1))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (local.get $cap)))
+        (local.set $entry (i32.add (local.get $entries) (i32.mul (local.get $i) (global.get $OE_SIZE))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (if (i32.eq (i32.load offset=4 (local.get $entry)) (global.get $NONE)) (then (br $loop)))
+        (local.set $dep (i32.load offset=16 (local.get $entry)))
+        (if (i32.eq (local.get $dep) (global.get $NONE)) (then (br $loop)))
+        (if (i32.eqz (call $bit_test (local.get $cont) (call $fr (local.get $frame) (global.get $F_AUX2)) (i32.load offset=12 (local.get $entry))))
+          (then (br $loop)))
+        (local.set $dep (i32.add (local.get $program) (local.get $dep)))
+        (local.set $dep_count (i32.load (local.get $dep)))
+        (local.set $kw (global.get $KW_DEPENDENT_REQUIRED))
+        (if (i32.and (local.get $dep_count) (i32.const 0x80000000))
+          (then (local.set $kw (global.get $KW_DEPENDENCIES)) (local.set $dep_count (i32.and (local.get $dep_count) (i32.const 0x7fffffff)))))
+        (local.set $n (i32.const 0))
+        (block $deps_done
+          (loop $deps
+            (call $work_add (i32.const 1))
+            (br_if $deps_done (i32.ge_u (local.get $n) (local.get $dep_count)))
+            (local.set $dep_entry (i32.add (local.get $entries)
+              (i32.mul (i32.load (i32.add (local.get $dep) (i32.add (i32.const 8) (i32.shl (local.get $n) (i32.const 2))))) (global.get $OE_SIZE))))
+            (if (i32.eqz (call $bit_test (local.get $cont) (call $fr (local.get $frame) (global.get $F_AUX2)) (i32.load offset=12 (local.get $dep_entry))))
+              (then
+                (if (call $push_error (local.get $cont) (local.get $kw) (local.get $node) (global.get $PK_DEPENDENCY)
+                                      (i32.load offset=4 (local.get $entry)) (i32.load offset=4 (local.get $dep_entry)) (i32.const 0))
+                  (then (return (i32.const 0))))))
+            (local.set $n (i32.add (local.get $n) (i32.const 1)))
+            (br $deps)))
+        (local.set $child (i32.load offset=4 (local.get $dep)))
+        (if (i32.ne (local.get $child) (global.get $NONE))
+          (then
+            (call $fr_set (local.get $frame) (global.get $F_AUX3) (local.get $i))
+            (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $child)
+                                           (call $fr (local.get $frame) (global.get $F_VALUE)) (i32.const 0)))
+              (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+            (return (i32.const 0))))
+        (br $loop)))
+    (call $pop_frame (local.get $cont))
+    (i32.const 0))
+
+  ;; One element (or the post-pass step) of an ARRAY_PASS frame.
+  (func $step_array (param $cont i32) (param $frame i32) (result i32)
+    (local $program i32) (local $doc i32) (local $doc_end i32) (local $node i32) (local $table i32)
+    (local $index i32) (local $count i32) (local $step i32) (local $elem i32) (local $eoff i32)
+    (local $hash i32) (local $size i32) (local $cap i32) (local $slot i32) (local $entry i32) (local $arena i32)
+    (local $r i32) (local $child i32) (local $next i32) (local $n i32) (local $min i32) (local $max i32) (local $probes i32)
+    (local.set $program (call $ch (local.get $cont) (global.get $CH_PROGRAM_ADDRESS)))
+    (local.set $doc (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS)))
+    (local.set $doc_end (i32.add (local.get $doc) (call $ch (local.get $cont) (global.get $CH_DOCUMENT_BYTES))))
+    (local.set $node (call $fr (local.get $frame) (global.get $F_NODE)))
+    (local.set $table (i32.add (local.get $program) (call $fr (local.get $frame) (global.get $F_AUX))))
+    (local.set $index (call $fr (local.get $frame) (global.get $F_INDEX)))
+    (local.set $count (call $fr (local.get $frame) (global.get $F_COUNT)))
+    (local.set $step (call $frame_step (local.get $frame)))
+    (if (i32.lt_u (local.get $index) (local.get $count))
+      (then
+        (local.set $eoff (call $fr (local.get $frame) (global.get $F_CURSOR)))
+        (local.set $elem (i32.add (local.get $doc) (local.get $eoff)))
+        (if (i32.eqz (local.get $step))
+          (then
+            (call $charge (local.get $cont) (i32.const 1))
+            (call $frame_set_step (local.get $frame) (i32.const 1))
+            (if (i32.load offset=24 (local.get $table))
+              (then
+                (local.set $size (call $doc_size (local.get $cont) (local.get $elem)))
+                (if (i32.lt_s (local.get $size) (i32.const 0)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+                (local.set $hash (call $mp_hash (local.get $elem) (local.get $doc_end) (i32.const 0)))
+                (local.set $cap (call $fr (local.get $frame) (global.get $F_PC)))
+                (local.set $arena (call $arena_addr (local.get $cont) (call $fr (local.get $frame) (global.get $F_AUX2))))
+                (local.set $slot (i32.and (local.get $hash) (i32.sub (local.get $cap) (i32.const 1))))
+                (block $done
+                  (loop $probe
+                    (call $work_add (i32.const 1))
+                    (br_if $done (i32.ge_u (local.get $probes) (local.get $cap)))
+                    (local.set $entry (i32.add (local.get $arena) (i32.mul (local.get $slot) (global.get $UNIQUE_ENTRY_SIZE))))
+                    (if (i32.eqz (i32.load offset=8 (local.get $entry)))
+                      (then
+                        (i32.store (local.get $entry) (local.get $hash))
+                        (i32.store offset=4 (local.get $entry) (local.get $eoff))
+                        (i32.store offset=8 (local.get $entry) (i32.add (local.get $index) (i32.const 1)))
+                        (br $done)))
+                    (if (i32.eq (i32.load (local.get $entry)) (local.get $hash))
+                      (then
+                        (local.set $r (call $mp_equal (local.get $elem) (local.get $doc_end)
+                                                      (i32.add (local.get $doc) (i32.load offset=4 (local.get $entry))) (local.get $doc_end)
+                                                      (i32.const 0)))
+                        (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                        (if (local.get $r)
+                          (then
+                            (drop (call $push_error (local.get $cont) (global.get $KW_UNIQUE_ITEMS) (local.get $node) (global.get $PK_INDICES)
+                                                    (local.get $index) (i32.sub (i32.load offset=8 (local.get $entry)) (i32.const 1)) (i32.const 0)))
+                            (br $done)))))
+                    (local.set $slot (i32.and (i32.add (local.get $slot) (i32.const 1)) (i32.sub (local.get $cap) (i32.const 1))))
+                    (local.set $probes (i32.add (local.get $probes) (i32.const 1)))
+                    (br $probe)))
+                (if (i32.eq (call $ch (local.get $cont) (global.get $CH_PHASE)) (global.get $PHASE_COMPLETE))
+                  (then (return (i32.const 0))))))
+            (local.set $step (i32.const 1))))
+        (if (i32.eq (local.get $step) (i32.const 1))
+          (then
+            (call $frame_set_step (local.get $frame) (i32.const 2))
+            (local.set $child (global.get $NONE))
+            (if (i32.lt_u (local.get $index) (i32.load (local.get $table)))
+              (then (local.set $child (i32.load (i32.add (i32.add (local.get $program) (i32.load offset=4 (local.get $table)))
+                                                         (i32.add (i32.const 4) (i32.shl (local.get $index) (i32.const 2)))))))
+              (else (local.set $child (i32.load offset=8 (local.get $table)))))
+            (if (i32.ne (local.get $child) (global.get $NONE))
+              (then
+                (call $mark_evaluated (local.get $cont) (call $pass_owner (local.get $cont)) (local.get $index))
+                (call $push_path (local.get $cont) (i32.const 1) (local.get $index) (i32.const 0))
+                (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $child) (local.get $eoff) (global.get $FF_PATH_PUSHED)))
+                  (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                (return (i32.const 0))))
+            (local.set $step (i32.const 2))))
+        (if (i32.eq (local.get $step) (i32.const 2))
+          (then
+            (call $frame_set_step (local.get $frame) (i32.const 3))
+            (local.set $child (i32.load offset=12 (local.get $table)))
+            (if (i32.ne (local.get $child) (global.get $NONE))
+              (then
+                (call $push_path (local.get $cont) (i32.const 1) (local.get $index) (i32.const 0))
+                (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $child) (local.get $eoff)
+                                               (i32.or (global.get $FF_PATH_PUSHED) (i32.or (global.get $FF_TRIAL) (global.get $FF_CONTAINS_TRIAL)))))
+                  (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                (return (i32.const 0))))))
+        ;; advance
+        (local.set $next (call $mp_skip (local.get $elem) (local.get $doc_end)))
+        (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+        (call $fr_set (local.get $frame) (global.get $F_CURSOR) (i32.sub (local.get $next) (local.get $doc)))
+        (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.add (local.get $index) (i32.const 1)))
+        (call $frame_set_step (local.get $frame) (i32.const 0))
+        (return (i32.const 0))))
+    ;; post pass: contains counts
+    (call $charge (local.get $cont) (i32.const 1))
+    (if (i32.ne (i32.load offset=12 (local.get $table)) (global.get $NONE))
+      (then
+        (local.set $n (call $fr (local.get $frame) (global.get $F_AUX3)))
+        (local.set $min (i32.load offset=16 (local.get $table)))
+        (local.set $max (i32.load offset=20 (local.get $table)))
+        (if (i32.lt_u (local.get $n) (local.get $min))
+          (then
+            (if (call $push_error (local.get $cont)
+                  (select (global.get $KW_MIN_CONTAINS) (global.get $KW_CONTAINS) (i32.and (i32.load offset=28 (local.get $table)) (i32.const 1)))
+                  (local.get $node) (global.get $PK_COUNT) (local.get $min) (local.get $max) (local.get $n))
+              (then (return (i32.const 0))))))
+        (if (i32.and (i32.ne (local.get $max) (global.get $NONE)) (i32.gt_u (local.get $n) (local.get $max)))
+          (then
+            (if (call $push_error (local.get $cont) (global.get $KW_MAX_CONTAINS) (local.get $node) (global.get $PK_COUNT)
+                                  (local.get $min) (local.get $max) (local.get $n))
+              (then (return (i32.const 0))))))))
+    (call $pop_frame (local.get $cont))
+    (i32.const 0))
+
+  ;; One entry of an unevaluatedProperties/Items pass (AUX = child node,
+  ;; AUX2 = 1 for properties). Unevaluated entries get the child applied
+  ;; and become evaluated; a false child reports the keyword directly.
+  (func $step_uneval (param $cont i32) (param $frame i32) (result i32)
+    (local $doc i32) (local $doc_end i32) (local $index i32) (local $count i32) (local $cursor i32) (local $owner i32) (local $child i32)
+    (local $kk i32) (local $kh i32) (local $klen i32) (local $key i32) (local $value i32) (local $next i32) (local $text i32) (local $is_props i32) (local $step i32)
+    (local.set $doc (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS)))
+    (local.set $doc_end (i32.add (local.get $doc) (call $ch (local.get $cont) (global.get $CH_DOCUMENT_BYTES))))
+    (local.set $index (call $fr (local.get $frame) (global.get $F_INDEX)))
+    (local.set $count (call $fr (local.get $frame) (global.get $F_COUNT)))
+    (local.set $child (call $fr (local.get $frame) (global.get $F_AUX)))
+    (local.set $is_props (call $fr (local.get $frame) (global.get $F_AUX2)))
+    (local.set $step (call $frame_step (local.get $frame)))
+    (call $charge (local.get $cont) (i32.const 1))
+    (if (i32.ge_u (local.get $index) (local.get $count))
+      (then (call $pop_frame (local.get $cont)) (return (i32.const 0))))
+    (local.set $owner (call $pass_owner (local.get $cont)))
+    (local.set $cursor (i32.add (local.get $doc) (call $fr (local.get $frame) (global.get $F_CURSOR))))
+    (local.set $value (local.get $cursor))
+    (if (local.get $is_props)
+      (then
+        (call $mp_header (local.get $cursor) (local.get $doc_end)) (local.set $klen) (local.set $kh) (local.set $kk)
+        (if (i32.ne (local.get $kk) (global.get $K_STR)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+        (local.set $key (i32.add (local.get $cursor) (local.get $kh)))
+        (local.set $value (i32.add (local.get $key) (local.get $klen)))))
+    (if (i32.eqz (local.get $step))
+      (then
+        (call $frame_set_step (local.get $frame) (i32.const 1))
+        (if (i32.eqz (i32.and (i32.ne (local.get $owner) (i32.const 0))
+                              (call $bit_test (local.get $cont) (call $fr (local.get $owner) (global.get $F_AUX)) (local.get $index))))
+          (then
+            ;; unevaluated: apply the child (or report) and mark
+            (call $mark_evaluated (local.get $cont) (local.get $owner) (local.get $index))
+            (if (i32.eq (local.get $child) (global.get $FALSE_NODE))
+              (then
+                (if (local.get $is_props)
+                  (then
+                    (local.set $text (i32.const -1))
+                    (if (i32.eq (call $ch (local.get $cont) (global.get $CH_MODE)) (global.get $MODE_VALIDATE))
+                      (then (local.set $text (call $epath_text (local.get $cont) (local.get $key) (local.get $klen)))))
+                    (drop (call $push_error (local.get $cont) (global.get $KW_UNEVALUATED_PROPERTIES) (call $fr (local.get $frame) (global.get $F_NODE))
+                                            (global.get $PK_TEXT) (local.get $text) (local.get $klen) (i32.const 0))))
+                  (else
+                    (drop (call $push_error (local.get $cont) (global.get $KW_UNEVALUATED_ITEMS) (call $fr (local.get $frame) (global.get $F_NODE))
+                                            (global.get $PK_INDICES) (local.get $index) (i32.const 0) (i32.const 0)))))
+                (if (i32.eq (call $ch (local.get $cont) (global.get $CH_PHASE)) (global.get $PHASE_COMPLETE)) (then (return (i32.const 0)))))
+              (else
+                (if (local.get $is_props)
+                  (then (call $push_path (local.get $cont) (i32.const 0) (i32.sub (local.get $key) (local.get $doc)) (local.get $klen)))
+                  (else (call $push_path (local.get $cont) (i32.const 1) (local.get $index) (i32.const 0))))
+                (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $child) (i32.sub (local.get $value) (local.get $doc)) (global.get $FF_PATH_PUSHED)))
+                  (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                (return (i32.const 0))))))))
+    ;; advance
+    (local.set $next (call $mp_skip (local.get $value) (local.get $doc_end)))
+    (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+    (call $fr_set (local.get $frame) (global.get $F_CURSOR) (i32.sub (local.get $next) (local.get $doc)))
+    (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.add (local.get $index) (i32.const 1)))
+    (call $frame_set_step (local.get $frame) (i32.const 0))
+    (i32.const 0))
+
+  (func $list_item (param $program i32) (param $list i32) (param $index i32) (result i32)
+    (i32.load (i32.add (i32.add (local.get $program) (local.get $list)) (i32.add (i32.const 4) (i32.shl (local.get $index) (i32.const 2))))))
+
+  (func $step_branch (param $cont i32) (param $frame i32) (result i32)
+    (local $program i32) (local $kind i32) (local $index i32) (local $count i32) (local $node i32) (local $value i32)
+    (local $result i32) (local $child i32)
+    (local.set $program (call $ch (local.get $cont) (global.get $CH_PROGRAM_ADDRESS)))
+    (local.set $kind (call $fr (local.get $frame) (global.get $F_KIND)))
+    (local.set $index (call $fr (local.get $frame) (global.get $F_INDEX)))
+    (local.set $count (call $fr (local.get $frame) (global.get $F_COUNT)))
+    (local.set $node (call $fr (local.get $frame) (global.get $F_NODE)))
+    (local.set $value (call $fr (local.get $frame) (global.get $F_VALUE)))
+    (local.set $result (call $fr (local.get $frame) (global.get $F_CHILD_RESULT)))
+    (call $charge (local.get $cont) (i32.const 1))
+    (if (i32.eq (local.get $kind) (global.get $FK_ALL_OF))
+      (then
+        (if (i32.lt_u (local.get $index) (local.get $count))
+          (then
+            (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.add (local.get $index) (i32.const 1)))
+            (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE)
+                  (call $list_item (local.get $program) (call $fr (local.get $frame) (global.get $F_AUX)) (local.get $index))
+                  (local.get $value) (i32.const 0)))
+              (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+            (return (i32.const 0))))
+        (call $pop_frame (local.get $cont))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $kind) (global.get $FK_ANY_OF))
+      (then
+        (if (i32.and (i32.ne (local.get $index) (i32.const 0)) (local.get $result))
+          (then
+            (call $fr_set (local.get $frame) (global.get $F_AUX2) (i32.const 1))
+            ;; with annotation collection every branch must run
+            (if (i32.eqz (call $annotation_target (local.get $cont) (i32.sub (call $ch (local.get $cont) (global.get $CH_FRAME_COUNT)) (i32.const 2)) (local.get $value)))
+              (then (call $pop_frame (local.get $cont)) (return (i32.const 0))))))
+        (if (i32.lt_u (local.get $index) (local.get $count))
+          (then
+            (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.add (local.get $index) (i32.const 1)))
+            (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE)
+                  (call $list_item (local.get $program) (call $fr (local.get $frame) (global.get $F_AUX)) (local.get $index))
+                  (local.get $value) (global.get $FF_TRIAL)))
+              (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+            (return (i32.const 0))))
+        (if (i32.eqz (call $fr (local.get $frame) (global.get $F_AUX2)))
+          (then
+            (if (call $push_error (local.get $cont) (global.get $KW_ANY_OF) (local.get $node) (global.get $PK_NONE) (i32.const 0) (i32.const 0) (i32.const 0))
+              (then (return (i32.const 0))))))
+        (call $pop_frame (local.get $cont))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $kind) (global.get $FK_ONE_OF))
+      (then
+        (if (local.get $index)
+          (then (call $fr_set (local.get $frame) (global.get $F_AUX2) (i32.add (call $fr (local.get $frame) (global.get $F_AUX2)) (local.get $result)))))
+        (if (i32.lt_u (local.get $index) (local.get $count))
+          (then
+            (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.add (local.get $index) (i32.const 1)))
+            (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE)
+                  (call $list_item (local.get $program) (call $fr (local.get $frame) (global.get $F_AUX)) (local.get $index))
+                  (local.get $value) (global.get $FF_TRIAL)))
+              (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+            (return (i32.const 0))))
+        (if (i32.ne (call $fr (local.get $frame) (global.get $F_AUX2)) (i32.const 1))
+          (then
+            (if (call $push_error (local.get $cont) (global.get $KW_ONE_OF) (local.get $node) (global.get $PK_COUNT)
+                                  (call $fr (local.get $frame) (global.get $F_AUX2)) (i32.const 0) (i32.const 0))
+              (then (return (i32.const 0))))))
+        (call $pop_frame (local.get $cont))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $kind) (global.get $FK_NOT))
+      (then
+        (if (i32.eqz (local.get $index))
+          (then
+            (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.const 1))
+            (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (call $fr (local.get $frame) (global.get $F_AUX))
+                                           (local.get $value) (global.get $FF_TRIAL)))
+              (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+            (return (i32.const 0))))
+        (if (local.get $result)
+          (then
+            (if (call $push_error (local.get $cont) (global.get $KW_NOT) (local.get $node) (global.get $PK_NONE) (i32.const 0) (i32.const 0) (i32.const 0))
+              (then (return (i32.const 0))))))
+        (call $pop_frame (local.get $cont))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $kind) (global.get $FK_IF))
+      (then
+        (if (i32.eqz (local.get $index))
+          (then
+            (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.const 1))
+            (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (call $fr (local.get $frame) (global.get $F_AUX))
+                                           (local.get $value) (global.get $FF_TRIAL)))
+              (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+            (return (i32.const 0))))
+        (if (i32.eq (local.get $index) (i32.const 1))
+          (then
+            (call $fr_set (local.get $frame) (global.get $F_INDEX) (i32.const 2))
+            (local.set $child (select (call $fr (local.get $frame) (global.get $F_AUX2))
+                                      (call $fr (local.get $frame) (global.get $F_AUX3))
+                                      (local.get $result)))
+            (if (i32.ne (local.get $child) (global.get $NONE))
+              (then
+                (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (local.get $child) (local.get $value) (i32.const 0)))
+                  (then (return (global.get $STATUS_LIMIT_EXCEEDED))))
+                (return (i32.const 0))))))
+        (call $pop_frame (local.get $cont))
+        (return (i32.const 0))))
+    (global.get $STATUS_CORRUPT_PROGRAM))
+
+  ;; Run under a fuel budget. Returns (status, fuel remaining): PAUSED
+  ;; with a complete continuation, VALID/INVALID when finished, or a
+  ;; terminal error status.
+  (func $run_validation_impl
+    (param $cont i32) (param $capacity i32) (param $fuel i32) (result i32 i32)
+    (local $frame i32) (local $kind i32) (local $status i32) 
+    (if (i32.lt_u (local.get $capacity) (global.get $CONT_HEADER_SIZE))
+      (then (return (global.get $STATUS_BUFFER_TOO_SMALL) (local.get $fuel))))
+    (if (i32.ne (call $ch (local.get $cont) (global.get $CH_MAGIC)) (global.get $CONT_MAGIC))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM) (local.get $fuel))))
+    (if (i32.ne (call $ch (local.get $cont) (global.get $CH_VERSION)) (global.get $CONT_VERSION))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM) (local.get $fuel))))
+    (if (i32.gt_u (i32.add (call $ch (local.get $cont) (global.get $CH_REGEX_OFFSET)) (call $ch (local.get $cont) (global.get $CH_REGEX_CAPACITY)))
+                  (local.get $capacity))
+      (then (return (global.get $STATUS_BUFFER_TOO_SMALL) (local.get $fuel))))
+    (if (i32.eq (call $ch (local.get $cont) (global.get $CH_PHASE)) (global.get $PHASE_COMPLETE))
+      (then (return (call $ch (local.get $cont) (global.get $CH_RESULT)) (local.get $fuel))))
+    ;; A fresh set's gate pass is atomic, but still needs a positive grant.
+    ;; Completed continuations above remain readable with no fuel.
+    (if (i32.le_s (local.get $fuel) (i32.const 0))
+      (then (return (global.get $STATUS_PAUSED) (local.get $fuel))))
+    ;; set programs: the gate pass and the first route decision
+    (if (i32.and (i32.ne (call $ch (local.get $cont) (global.get $CH_ROUTE_COUNT)) (i32.const 0))
+                 (i32.eq (call $ch (local.get $cont) (global.get $CH_ROUTE_CURSOR)) (i32.const -1)))
+      (then
+        (call $set_gate_pass (local.get $cont))
+        (call $set_advance (local.get $cont))
+        (local.set $fuel (call $work_take (local.get $fuel)))
+        (if (i32.eq (call $ch (local.get $cont) (global.get $CH_PHASE)) (global.get $PHASE_COMPLETE))
+          (then (return (call $ch (local.get $cont) (global.get $CH_RESULT)) (local.get $fuel))))))
+    (block $exit
+      (loop $loop
+        (local.set $fuel (call $work_take (local.get $fuel)))
+        (br_if $exit (i32.le_s (local.get $fuel) (i32.const 0)))
+        (local.set $frame (call $top_frame (local.get $cont)))
+        (local.set $kind (call $fr (local.get $frame) (global.get $F_KIND)))
+        (call $ch_set (local.get $cont) (global.get $CH_GRANT) (local.get $fuel))
+        (if (i32.eq (local.get $kind) (global.get $FK_NODE))
+          (then (local.set $status (call $step_node (local.get $cont) (local.get $frame))))
+          (else
+            (if (i32.eq (local.get $kind) (global.get $FK_OBJECT_PASS))
+              (then (local.set $status (call $step_object (local.get $cont) (local.get $frame))))
+              (else
+                (if (i32.eq (local.get $kind) (global.get $FK_ARRAY_PASS))
+                  (then (local.set $status (call $step_array (local.get $cont) (local.get $frame))))
+                  (else
+                    (if (i32.eq (local.get $kind) (global.get $FK_REGEX))
+                      (then (local.set $status (call $step_regex (local.get $cont) (local.get $frame))))
+                      (else
+                        (if (i32.eq (local.get $kind) (global.get $FK_UNEVAL))
+                          (then (local.set $status (call $step_uneval (local.get $cont) (local.get $frame))))
+                          (else (local.set $status (call $step_branch (local.get $cont) (local.get $frame)))))))))))))
+        (local.set $fuel (call $work_take (local.get $fuel)))
+        (if (local.get $status)
+          (then (return (call $finish (local.get $cont) (local.get $status)) (local.get $fuel))))
+        ;; a TEST-mode error inside a set route ends that route only
+        (if (call $ch (local.get $cont) (global.get $CH_ROUTE_ABORT))
+          (then (call $set_route_finish (local.get $cont) (i32.const 0))))
+        (if (i32.eq (call $ch (local.get $cont) (global.get $CH_PHASE)) (global.get $PHASE_COMPLETE))
+          (then (return (call $ch (local.get $cont) (global.get $CH_RESULT)) (local.get $fuel))))
+        (br $loop)))
+    (global.get $STATUS_PAUSED) (local.get $fuel))
+
+  ;; ==========================================================================
+  ;; Compiler. One depth-first walk over the schema msgpack drives both
+  ;; passes: MEASURE counts nodes, code, and pool bytes; EMIT writes them.
+  ;; Every node is processed in three phases — COLLECT its keyword pairs
+  ;; into slots, GENERATE its contiguous code run (assigning child node ids
+  ;; in a fixed order), then walk CHILDREN in that same order — so a
+  ;; node's run never interleaves with a child's and both passes assign
+  ;; identical ids. State lives entirely in the caller's workspace.
+  ;; ==========================================================================
+
+  (global $CW_MAGIC i32 (i32.const 0x57435353))
+  (global $CW_VERSION i32 (i32.const 2))
+  (global $CW_HEADER_SIZE i32 (i32.const 360))
+  (global $CW_FRAME_SIZE i32 (i32.const 328))
+  (global $CW_SLOT_COUNT i32 (i32.const 64))
+  (global $CW_KEYWORD_TABLE_BYTES i32 (i32.const 2048))
+  (global $CW_KEYWORD_INDEX i32 (i32.const 704))
+
+  (global $CWH_MAGIC i32 (i32.const 0))
+  (global $CWH_VERSION i32 (i32.const 4))
+  (global $CWH_SCHEMA_ADDRESS i32 (i32.const 8))
+  (global $CWH_SCHEMA_BYTES i32 (i32.const 12))
+  (global $CWH_PASS i32 (i32.const 16))
+  (global $CWH_OPTIONS i32 (i32.const 20))
+  (global $CWH_FRAME_COUNT i32 (i32.const 24))
+  (global $CWH_FRAME_CAPACITY i32 (i32.const 28))
+  (global $CWH_FRAMES_OFFSET i32 (i32.const 32))
+  (global $CWH_NODE_COUNT i32 (i32.const 36))
+  (global $CWH_CODE_BYTES i32 (i32.const 40))
+  (global $CWH_POOL_BYTES i32 (i32.const 44))
+  (global $CWH_MAX_DEPTH i32 (i32.const 48))
+  (global $CWH_PROGRAM_ADDRESS i32 (i32.const 52))
+  (global $CWH_PROGRAM_CAPACITY i32 (i32.const 56))
+  (global $CWH_CODE_CURSOR i32 (i32.const 60))
+  (global $CWH_POOL_CURSOR i32 (i32.const 64))
+  (global $CWH_DIAGNOSTIC_CODE i32 (i32.const 68))
+  (global $CWH_DIAGNOSTIC_KEYWORD i32 (i32.const 72))
+  (global $CWH_DIAGNOSTIC_OFFSET i32 (i32.const 76))
+  (global $CWH_KEYWORD_TABLE_OFFSET i32 (i32.const 80))
+  (global $CWH_POINTER_BYTES i32 (i32.const 84))
+  (global $CWH_POINTER_OFFSET i32 (i32.const 88))
+  (global $CWH_MAP_OFFSET i32 (i32.const 92))
+  (global $CWH_MAP_CAPACITY i32 (i32.const 96))
+  (global $CWH_FIXUP_CURSOR i32 (i32.const 100))
+  (global $CWH_MAX_REGEX_CONTINUATION i32 (i32.const 104))
+  (global $CWH_ROOT_NODE i32 (i32.const 108))
+  (global $CWH_FUEL_CHARGED i32 (i32.const 112))
+  (global $CWH_TABLE_COUNTER i32 (i32.const 116))
+  (global $CWH_MEASURED_NODES i32 (i32.const 120))
+  (global $CWH_VISITED_OFFSET i32 (i32.const 124))
+  (global $CWH_EXTRA_OFFSET i32 (i32.const 128))
+  (global $CWH_EXTRA_COUNT i32 (i32.const 132))
+  (global $CWH_EXTRA_CURSOR i32 (i32.const 136))
+  (global $CW_EXTRA_CAPACITY i32 (i32.const 1024))
+  (global $CWH_DIAGNOSTIC_DETAIL i32 (i32.const 140))
+  (global $CWH_RSCAN_OFFSET i32 (i32.const 144))
+  (global $CWH_RSCAN_BYTES i32 (i32.const 148))
+  (global $CWH_REMIT_OFFSET i32 (i32.const 152))
+  (global $CWH_REMIT_BYTES i32 (i32.const 156))
+  (global $DIAG_REGEX i32 (i32.const 10))
+  (global $REGEX_STATUS_OK i32 (i32.const 0))
+  (global $REGEX_STATUS_PAUSED i32 (i32.const 1))
+  (global $REGEX_STATUS_MATCH i32 (i32.const 2))
+  (global $REGEX_STATUS_NO_MATCH i32 (i32.const 3))
+  (global $REGEX_STATUS_SYNTAX_ERROR i32 (i32.const 4))
+  (global $REGEX_STATUS_UNSUPPORTED i32 (i32.const 5))
+  (global $REGEX_STATUS_LIMIT_EXCEEDED i32 (i32.const 6))
+  (global $REGEX_STATUS_INVALID_UTF8 i32 (i32.const 9))
+  (global $REGEX_MAX_PATTERN_BYTES i32 (i32.const 65536))
+  (global $REGEX_RECORD_HEADER i32 (i32.const 8))
+
+  ;; Appended fields: never reuse old reserved bytes. All offsets relocate with ws.
+  (global $CWH_WORK i32 (i32.const 320)) ;; u64 total, u32 sticky overflow
+  (global $CWH_FINAL_PHASE i32 (i32.const 344))
+  (global $CWH_FINAL_CURSOR i32 (i32.const 348))
+  (global $CWH_FINAL_TABLE i32 (i32.const 352))
+  (global $CWH_TRACK_SEEDED i32 (i32.const 356))
+  (global $PASS_MEASURE i32 (i32.const 1))
+  (global $PASS_EMIT i32 (i32.const 2))
+  (global $PASS_FIXUP i32 (i32.const 3))
+  (global $PASS_COMPLETE i32 (i32.const 4))
+
+  (global $OPT_STRICT i32 (i32.const 1))
+  (global $OPT_FORMAT_ANNOTATE i32 (i32.const 2))
+  (global $OPT_DIALECT_07 i32 (i32.const 4))
+  (global $OPT_DIALECT_04 i32 (i32.const 8))
+
+  (global $DIAG_SCHEMA_NOT_OBJECT i32 (i32.const 1))
+  (global $DIAG_KEYWORD_SHAPE i32 (i32.const 2))
+  (global $DIAG_REF_UNRESOLVABLE i32 (i32.const 3))
+  (global $DIAG_REF_NOT_LOCAL i32 (i32.const 4))
+  (global $DIAG_DEPTH i32 (i32.const 5))
+  (global $DIAG_POINTER_LENGTH i32 (i32.const 6))
+  (global $DIAG_NODE_COUNT i32 (i32.const 7))
+  (global $DIAG_TABLE_SIZE i32 (i32.const 8))
+  (global $DIAG_UNKNOWN_KEYWORD i32 (i32.const 9))
+  (global $DIAG_UNKNOWN_FORMAT i32 (i32.const 11))
+  (global $DIAG_BIGNUM i32 (i32.const 12))
+
+  ;; Compile frame fields.
+  (global $CF_VALUE i32 (i32.const 0))
+  (global $CF_NODE_ID i32 (i32.const 4))
+  (global $CF_PHASE i32 (i32.const 8))
+  (global $CF_CURSOR i32 (i32.const 12))
+  (global $CF_REMAINING i32 (i32.const 16))
+  (global $CF_KW_INDEX i32 (i32.const 20))
+  (global $CF_ENTRY_CURSOR i32 (i32.const 24))
+  (global $CF_ENTRY_INDEX i32 (i32.const 28))
+  (global $CF_ENTRY_COUNT i32 (i32.const 32))
+  (global $CF_POINTER_LEN i32 (i32.const 36))
+  (global $CF_CHILD_BASE i32 (i32.const 40))
+  (global $CF_CHILD_NEXT i32 (i32.const 44))
+  (global $CF_CODE_OFFSET i32 (i32.const 48))
+  (global $CF_TABLE i32 (i32.const 52))
+  (global $CF_ATABLE i32 (i32.const 56))
+  (global $CF_FLAGS i32 (i32.const 60))
+  (global $CF_SLOTS i32 (i32.const 64))
+
+  (global $CP_COLLECT i32 (i32.const 0))
+  (global $CP_GENERATE i32 (i32.const 1))
+  (global $CP_CHILDREN i32 (i32.const 2))
+
+  ;; Keyword codes (compiler side; same registry as the KW_* above).
+  (global $KW_DEFS i32 (i32.const 2))
+  (global $KW_DEFINITIONS i32 (i32.const 3))
+  (global $KW_ID i32 (i32.const 4))
+  (global $KW_SCHEMA i32 (i32.const 11))
+
+  ;; Child sources, in id-assignment order (GENERATE and CHILDREN agree).
+  (global $CS_PROPERTIES i32 (i32.const 0))
+  (global $CS_PATTERN_PROPERTIES i32 (i32.const 1))
+  (global $CS_ADDITIONAL_PROPERTIES i32 (i32.const 2))
+  (global $CS_PROPERTY_NAMES i32 (i32.const 3))
+  (global $CS_DEPENDENT_SCHEMAS i32 (i32.const 4))
+  (global $CS_DEPENDENCIES i32 (i32.const 5))
+  (global $CS_PREFIX_ITEMS i32 (i32.const 6))
+  (global $CS_ITEMS i32 (i32.const 7))
+  (global $CS_ADDITIONAL_ITEMS i32 (i32.const 8))
+  (global $CS_CONTAINS i32 (i32.const 9))
+  (global $CS_ALL_OF i32 (i32.const 10))
+  (global $CS_ANY_OF i32 (i32.const 11))
+  (global $CS_ONE_OF i32 (i32.const 12))
+  (global $CS_NOT i32 (i32.const 13))
+  (global $CS_IF i32 (i32.const 14))
+  (global $CS_THEN i32 (i32.const 15))
+  (global $CS_ELSE i32 (i32.const 16))
+  (global $CS_UNEVALUATED_PROPERTIES i32 (i32.const 17))
+  (global $CS_UNEVALUATED_ITEMS i32 (i32.const 18))
+  (global $CS_DEFS i32 (i32.const 19))
+  (global $CS_DEFINITIONS i32 (i32.const 20))
+  (global $CS_COUNT i32 (i32.const 21))
+
+  ;; Generate steps.
+  (global $GS_HEADER i32 (i32.const 0))
+  (global $GS_REF i32 (i32.const 1))
+  (global $GS_TYPE i32 (i32.const 2))
+  (global $GS_CONST i32 (i32.const 3))
+  (global $GS_ENUM i32 (i32.const 4))
+  (global $GS_NUMERIC i32 (i32.const 5))
+  (global $GS_LIMITS i32 (i32.const 6))
+  (global $GS_OBJECT i32 (i32.const 7))
+  (global $GS_ARRAY i32 (i32.const 8))
+  (global $GS_LOGIC i32 (i32.const 9))
+  (global $GS_UNEVALUATED i32 (i32.const 10))
+  (global $GS_END i32 (i32.const 11))
+
+  (func $cw (param $ws i32) (param $field i32) (result i32)
+    (i32.load (i32.add (local.get $ws) (local.get $field))))
+  (func $cw_set (param $ws i32) (param $field i32) (param $v i32)
+    (i32.store (i32.add (local.get $ws) (local.get $field)) (local.get $v)))
+  (func $cf (param $frame i32) (param $field i32) (result i32)
+    (i32.load (i32.add (local.get $frame) (local.get $field))))
+  (func $cf_set (param $frame i32) (param $field i32) (param $v i32)
+    (i32.store (i32.add (local.get $frame) (local.get $field)) (local.get $v)))
+  (func $slot (param $frame i32) (param $code i32) (result i32)
+    (i32.load (i32.add (i32.add (local.get $frame) (global.get $CF_SLOTS)) (i32.shl (local.get $code) (i32.const 2)))))
+  (func $cframe_at (param $ws i32) (param $index i32) (result i32)
+    (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_FRAMES_OFFSET)))
+             (i32.mul (local.get $index) (global.get $CW_FRAME_SIZE))))
+  (func $ctop (param $ws i32) (result i32)
+    (call $cframe_at (local.get $ws) (i32.sub (call $cw (local.get $ws) (global.get $CWH_FRAME_COUNT)) (i32.const 1))))
+  (func $schema_addr (param $ws i32) (result i32)
+    (call $cw (local.get $ws) (global.get $CWH_SCHEMA_ADDRESS)))
+  (func $schema_end (param $ws i32) (result i32)
+    (i32.add (call $cw (local.get $ws) (global.get $CWH_SCHEMA_ADDRESS)) (call $cw (local.get $ws) (global.get $CWH_SCHEMA_BYTES))))
+  (func $emitting (param $ws i32) (result i32)
+    (i32.eq (call $cw (local.get $ws) (global.get $CWH_PASS)) (global.get $PASS_EMIT)))
+  (func $ccharge (param $ws i32) (param $n i32)
+    (call $work_add (local.get $n)))
+  (func $diag (param $ws i32) (param $code i32) (param $keyword i32) (param $offset i32) (param $status i32) (result i32)
+    (call $cw_set (local.get $ws) (global.get $CWH_DIAGNOSTIC_CODE) (local.get $code))
+    (call $cw_set (local.get $ws) (global.get $CWH_DIAGNOSTIC_KEYWORD) (local.get $keyword))
+    (call $cw_set (local.get $ws) (global.get $CWH_DIAGNOSTIC_OFFSET) (local.get $offset))
+    (local.get $status))
+
+  (func $compile_workspace_size (export "compile_workspace_size") (param $schema_bytes i32) (result i32)
+    (if (i32.gt_u (local.get $schema_bytes) (global.get $MAX_SCHEMA_BYTES)) (then (return (i32.const -1))))
+    (i32.add
+      (i32.add (i32.add (global.get $CW_HEADER_SIZE) (global.get $CW_KEYWORD_TABLE_BYTES))
+               (i32.add (i32.shl (global.get $MAX_POINTER_BYTES) (i32.const 1)) (i32.mul (global.get $MAX_STATIC_DEPTH) (global.get $CW_FRAME_SIZE))))
+      (i32.add
+        (i32.add (call $align8 (i32.add (i32.shr_u (local.get $schema_bytes) (i32.const 3)) (i32.const 8)))
+                 (i32.shl (global.get $CW_EXTRA_CAPACITY) (i32.const 3)))
+        (i32.add (call $regex_workspace_bytes (local.get $schema_bytes)) (call $resource_workspace_bytes (local.get $schema_bytes))))))
+
+  ;; Reference/resource tables scale with the schema (each entry needs at
+  ;; least a few schema bytes), bounded above.
+  (func $cap_for (param $schema_bytes i32) (param $divisor i32) (param $floor i32) (param $ceiling i32) (result i32)
+    (local $v i32)
+    (local.set $v (i32.add (i32.div_u (local.get $schema_bytes) (local.get $divisor)) (local.get $floor)))
+    (select (local.get $ceiling) (local.get $v) (i32.gt_u (local.get $v) (local.get $ceiling))))
+  (func $res_cap_for (param $schema_bytes i32) (result i32)
+    (call $cap_for (local.get $schema_bytes) (i32.const 8) (i32.const 8) (i32.const 4096)))
+  (func $anchor_cap_for (param $schema_bytes i32) (result i32)
+    (call $cap_for (local.get $schema_bytes) (i32.const 8) (i32.const 8) (i32.const 4096)))
+  (func $dref_cap_for (param $schema_bytes i32) (result i32)
+    (call $cap_for (local.get $schema_bytes) (i32.const 4) (i32.const 16) (i32.const 16384)))
+  (func $str_cap_for (param $schema_bytes i32) (result i32)
+    (call $cap_for (local.get $schema_bytes) (i32.const 1) (i32.const 512) (i32.const 262144)))
+  (func $resource_workspace_bytes (param $schema_bytes i32) (result i32)
+    (i32.add
+      (i32.add (call $align8 (call $str_cap_for (local.get $schema_bytes)))
+               (i32.mul (call $res_cap_for (local.get $schema_bytes)) (global.get $CW_RES_SIZE)))
+      (i32.add (i32.add (i32.mul (call $anchor_cap_for (local.get $schema_bytes)) (global.get $CW_ANCHOR_SIZE))
+                        (i32.mul (call $dref_cap_for (local.get $schema_bytes)) (global.get $CW_DREF_SIZE)))
+               (global.get $CW_URI_SCRATCH))))
+
+  ;; Largest pattern a schema can carry is bounded by its own size.
+  (func $regex_pattern_bound (param $schema_bytes i32) (result i32)
+    (select (global.get $REGEX_MAX_PATTERN_BYTES) (local.get $schema_bytes)
+            (i32.gt_u (local.get $schema_bytes) (global.get $REGEX_MAX_PATTERN_BYTES))))
+
+  (func $regex_workspace_bytes (param $schema_bytes i32) (result i32)
+    (local $bound i32)
+    (local.set $bound (call $regex_pattern_bound (local.get $schema_bytes)))
+    (i32.add (call $align8 (call $regex_scan_workspace_size (local.get $bound)))
+             (call $align8 (call $regex_emission_workspace_size (local.get $bound)))))
+
+  ;; Copy the keyword names into the workspace and build the (offset, len)
+  ;; index behind them.
+  (func $init_keyword_table (param $ws i32)
+    (local $base i32) (local $index i32) (local $i i32) (local $p i32) (local $start i32)
+    (local.set $base (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_KEYWORD_TABLE_OFFSET))))
+    ;; One scan unit per byte in the two NUL-delimited tables, plus the
+    ;; actual bulk-copy blocks. This setup is fixed-size and atomic.
+    (call $work_add (i32.add (global.get $KEYWORDS_BYTES) (global.get $FORMATS_BYTES)))
+    (call $work_add (call $bulk_charge (global.get $KEYWORDS_BYTES)))
+    (call $work_add (call $bulk_charge (global.get $FORMATS_BYTES)))
+    (memory.init $keywords (local.get $base) (i32.const 0) (global.get $KEYWORDS_BYTES))
+    (local.set $index (i32.add (local.get $base) (global.get $CW_KEYWORD_INDEX)))
+    (local.set $p (i32.const 0))
+    (local.set $i (i32.const 0))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (global.get $KEYWORD_COUNT)))
+        (local.set $start (local.get $p))
+        (block $scan
+          (loop $sl
+            (br_if $scan (i32.eqz (i32.load8_u (i32.add (local.get $base) (local.get $p)))))
+            (local.set $p (i32.add (local.get $p) (i32.const 1)))
+            (br $sl)))
+        (i32.store (i32.add (local.get $index) (i32.shl (local.get $i) (i32.const 3))) (local.get $start))
+        (i32.store offset=4 (i32.add (local.get $index) (i32.shl (local.get $i) (i32.const 3))) (i32.sub (local.get $p) (local.get $start)))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    ;; format names behind the keywords
+    (local.set $base (i32.add (local.get $base) (global.get $CW_FORMAT_TABLE)))
+    (memory.init $formats (local.get $base) (i32.const 0) (global.get $FORMATS_BYTES))
+    (local.set $index (i32.add (i32.sub (local.get $base) (global.get $CW_FORMAT_TABLE)) (global.get $CW_FORMAT_INDEX)))
+    (local.set $p (i32.const 0))
+    (local.set $i (i32.const 0))
+    (block $fdone
+      (loop $floop
+        (call $work_add (i32.const 1))
+        (br_if $fdone (i32.ge_u (local.get $i) (global.get $FMT_COUNT)))
+        (local.set $start (local.get $p))
+        (block $fscan
+          (loop $fsl
+            (br_if $fscan (i32.eqz (i32.load8_u (i32.add (local.get $base) (local.get $p)))))
+            (local.set $p (i32.add (local.get $p) (i32.const 1)))
+            (br $fsl)))
+        (i32.store (i32.add (local.get $index) (i32.shl (local.get $i) (i32.const 3))) (local.get $start))
+        (i32.store offset=4 (i32.add (local.get $index) (i32.shl (local.get $i) (i32.const 3))) (i32.sub (local.get $p) (local.get $start)))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $floop))))
+
+  ;; Format id (1-based) for a name, 0 when unknown.
+  (func $format_code (export "format_code") (param $ws i32) (param $addr i32) (param $len i32) (result i32)
+    (local $base i32) (local $index i32) (local $i i32) (local $entry i32)
+    (local.set $base (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_KEYWORD_TABLE_OFFSET))) (global.get $CW_FORMAT_TABLE)))
+    (local.set $index (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_KEYWORD_TABLE_OFFSET))) (global.get $CW_FORMAT_INDEX)))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (global.get $FMT_COUNT)))
+        (local.set $entry (i32.add (local.get $index) (i32.shl (local.get $i) (i32.const 3))))
+        (if (i32.eq (i32.load offset=4 (local.get $entry)) (local.get $len))
+          (then
+            (if (call $bytes_equal (i32.add (local.get $base) (i32.load (local.get $entry))) (local.get $addr) (local.get $len))
+              (then (return (i32.add (local.get $i) (i32.const 1)))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (i32.const 0))
+
+  ;; Keyword code for a key (1-based), 0 when unknown.
+  (func $keyword_code (export "keyword_code") (param $ws i32) (param $addr i32) (param $len i32) (result i32)
+    (local $base i32) (local $index i32) (local $i i32) (local $entry i32)
+    (local.set $base (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_KEYWORD_TABLE_OFFSET))))
+    (local.set $index (i32.add (local.get $base) (global.get $CW_KEYWORD_INDEX)))
+    (local.set $i (i32.const 0))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (global.get $KEYWORD_COUNT)))
+        (local.set $entry (i32.add (local.get $index) (i32.shl (local.get $i) (i32.const 3))))
+        (if (i32.eq (i32.load offset=4 (local.get $entry)) (local.get $len))
+          (then
+            (if (call $bytes_equal (i32.add (local.get $base) (i32.load (local.get $entry))) (local.get $addr) (local.get $len))
+              (then (return (i32.add (local.get $i) (i32.const 1)))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (i32.const 0))
+
+  ;; Keyword name for a code, written at out[0..len). Returns the length,
+  ;; 0 for an unknown code, -1 when cap cannot hold the table.
+  (func $keyword_name (export "keyword_name") (param $code i32) (param $out i32) (param $cap i32) (result i32)
+    (local $addr i32) (local $len i32)
+    (if (i32.lt_u (local.get $cap) (i32.add (global.get $KEYWORDS_BYTES) (i32.const 4))) (then (return (i32.const -1))))
+    (if (i32.or (i32.eqz (local.get $code)) (i32.gt_u (local.get $code) (global.get $KEYWORD_COUNT))) (then (return (i32.const 0))))
+    (memory.init $keywords (local.get $out) (i32.const 0) (global.get $KEYWORDS_BYTES))
+    (local.set $addr (call $table_entry (local.get $out) (i32.sub (local.get $code) (i32.const 1))
+                                        (i32.add (local.get $out) (global.get $KEYWORDS_BYTES))))
+    (local.set $len (i32.load (i32.add (local.get $out) (global.get $KEYWORDS_BYTES))))
+    (memory.copy (local.get $out) (local.get $addr) (local.get $len))
+    (local.get $len))
+
+  ;; JSON type name → mask (0 when unknown).
+  (func $type_name_mask (param $addr i32) (param $len i32) (result i32)
+    (local $w i32)
+    (local.set $w (i32.load (local.get $addr)))
+    (if (i32.eq (local.get $len) (i32.const 4))
+      (then (if (i32.eq (local.get $w) (i32.const 0x6c6c756e)) (then (return (global.get $T_NULL))))))
+    (if (i32.eq (local.get $len) (i32.const 5))
+      (then (if (i32.and (i32.eq (local.get $w) (i32.const 0x61727261)) (i32.eq (i32.load8_u offset=4 (local.get $addr)) (i32.const 0x79)))
+        (then (return (global.get $T_ARRAY))))))
+    (if (i32.eq (local.get $len) (i32.const 6))
+      (then
+        (if (i32.and (i32.eq (local.get $w) (i32.const 0x656a626f)) (i32.eq (i32.load16_u offset=4 (local.get $addr)) (i32.const 0x7463)))
+          (then (return (global.get $T_OBJECT))))
+        (if (i32.and (i32.eq (local.get $w) (i32.const 0x626d756e)) (i32.eq (i32.load16_u offset=4 (local.get $addr)) (i32.const 0x7265)))
+          (then (return (i32.or (global.get $T_NUMBER) (global.get $T_INTEGER)))))
+        (if (i32.and (i32.eq (local.get $w) (i32.const 0x69727473)) (i32.eq (i32.load16_u offset=4 (local.get $addr)) (i32.const 0x676e)))
+          (then (return (global.get $T_STRING))))))
+    (if (i32.eq (local.get $len) (i32.const 7))
+      (then
+        (if (i32.and (i32.eq (local.get $w) (i32.const 0x6c6f6f62))
+                     (i32.and (i32.eq (i32.load16_u offset=4 (local.get $addr)) (i32.const 0x6165)) (i32.eq (i32.load8_u offset=6 (local.get $addr)) (i32.const 0x6e))))
+          (then (return (global.get $T_BOOLEAN))))
+        (if (i32.and (i32.eq (local.get $w) (i32.const 0x65746e69))
+                     (i32.and (i32.eq (i32.load16_u offset=4 (local.get $addr)) (i32.const 0x6567)) (i32.eq (i32.load8_u offset=6 (local.get $addr)) (i32.const 0x72))))
+          (then (return (global.get $T_INTEGER))))))
+    (i32.const 0))
+
+  ;; --- emission primitives ---------------------------------------------------
+
+  ;; Reserve pool bytes (4-aligned). Returns the program-relative offset in
+  ;; EMIT, a running cursor in MEASURE, or -1 when the program buffer is full.
+  (func $pool_alloc (param $ws i32) (param $bytes i32) (result i32)
+    (local $cursor i32) (local $program i32) (local $cap i32) (local $off i32)
+    (local.set $bytes (call $align4 (local.get $bytes)))
+    (if (i32.eqz (call $emitting (local.get $ws)))
+      (then
+        (local.set $cursor (call $cw (local.get $ws) (global.get $CWH_POOL_BYTES)))
+        (call $cw_set (local.get $ws) (global.get $CWH_POOL_BYTES) (i32.add (local.get $cursor) (local.get $bytes)))
+        (return (local.get $cursor))))
+    (local.set $off (call $cw (local.get $ws) (global.get $CWH_POOL_CURSOR)))
+    (if (i32.gt_u (local.get $bytes) (i32.sub (call $cw (local.get $ws) (global.get $CWH_PROGRAM_CAPACITY)) (local.get $off)))
+      (then (return (i32.const -1))))
+    (call $work_zero (i32.add (call $cw (local.get $ws) (global.get $CWH_PROGRAM_ADDRESS)) (local.get $off)) (i32.const 0) (local.get $bytes))
+    (call $cw_set (local.get $ws) (global.get $CWH_POOL_CURSOR) (i32.add (local.get $off) (local.get $bytes)))
+    (local.get $off))
+
+  (func $prog (param $ws i32) (result i32)
+    (call $cw (local.get $ws) (global.get $CWH_PROGRAM_ADDRESS)))
+
+  (func $pool_string (param $ws i32) (param $addr i32) (param $len i32) (result i32)
+    (local $off i32)
+    (local.set $off (call $pool_alloc (local.get $ws) (i32.add (i32.const 4) (local.get $len))))
+    (if (i32.lt_s (local.get $off) (i32.const 0)) (then (return (i32.const -1))))
+    (if (call $emitting (local.get $ws))
+      (then
+        (i32.store (i32.add (call $prog (local.get $ws)) (local.get $off)) (local.get $len))
+        (call $work_copy (i32.add (i32.add (call $prog (local.get $ws)) (local.get $off)) (i32.const 4)) (local.get $addr) (local.get $len))))
+    (local.get $off))
+
+  ;; Copy one msgpack value (schema-relative offset) into a pool value record.
+  (func $pool_value (param $ws i32) (param $voff i32) (result i32)
+    (local $addr i32) (local $end i32) (local $next i32) (local $len i32) (local $off i32)
+    (local.set $addr (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)))
+    (local.set $end (call $schema_end (local.get $ws)))
+    (local.set $next (call $mp_skip (local.get $addr) (local.get $end)))
+    (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (i32.const -1))))
+    (local.set $len (i32.sub (local.get $next) (local.get $addr)))
+    (local.set $off (call $pool_alloc (local.get $ws) (i32.add (i32.const 8) (local.get $len))))
+    (if (i32.lt_s (local.get $off) (i32.const 0)) (then (return (i32.const -1))))
+    (if (call $emitting (local.get $ws))
+      (then
+        (i32.store (i32.add (call $prog (local.get $ws)) (local.get $off)) (local.get $len))
+        (i32.store offset=4 (i32.add (call $prog (local.get $ws)) (local.get $off))
+                   (call $mp_hash (local.get $addr) (local.get $end) (i32.const 0)))
+        (call $work_copy (i32.add (i32.add (call $prog (local.get $ws)) (local.get $off)) (i32.const 8)) (local.get $addr) (local.get $len))))
+    (local.get $off))
+
+  (func $pool_list (param $ws i32) (param $count i32) (result i32)
+    (local $off i32)
+    (local.set $off (call $pool_alloc (local.get $ws) (i32.add (i32.const 4) (i32.shl (local.get $count) (i32.const 2)))))
+    (if (i32.lt_s (local.get $off) (i32.const 0)) (then (return (i32.const -1))))
+    (if (call $emitting (local.get $ws))
+      (then (i32.store (i32.add (call $prog (local.get $ws)) (local.get $off)) (local.get $count))))
+    (local.get $off))
+
+  (func $pool_set (param $ws i32) (param $off i32) (param $field i32) (param $v i32)
+    (if (call $emitting (local.get $ws))
+      (then (i32.store (i32.add (i32.add (call $prog (local.get $ws)) (local.get $off)) (local.get $field)) (local.get $v)))))
+  (func $pool_get (param $ws i32) (param $off i32) (param $field i32) (result i32)
+    (i32.load (i32.add (i32.add (call $prog (local.get $ws)) (local.get $off)) (local.get $field))))
+  (func $pool_list_set (param $ws i32) (param $list i32) (param $index i32) (param $v i32)
+    (call $pool_set (local.get $ws) (local.get $list) (i32.add (i32.const 4) (i32.shl (local.get $index) (i32.const 2))) (local.get $v)))
+
+  (func $emit_instruction (param $ws i32) (param $op i32) (param $a i32) (param $b i32) (param $c i32) (result i32)
+    (local $cursor i32) (local $addr i32)
+    (if (i32.eqz (call $emitting (local.get $ws)))
+      (then
+        (call $cw_set (local.get $ws) (global.get $CWH_CODE_BYTES) (i32.add (call $cw (local.get $ws) (global.get $CWH_CODE_BYTES)) (global.get $INSTRUCTION_SIZE)))
+        (return (i32.const 1))))
+    (local.set $cursor (call $cw (local.get $ws) (global.get $CWH_CODE_CURSOR)))
+    (if (i32.gt_u (i32.add (local.get $cursor) (global.get $INSTRUCTION_SIZE)) (call $cw (local.get $ws) (global.get $CWH_POOL_CURSOR)))
+      (then (return (i32.const 0))))
+    (local.set $addr (i32.add (call $prog (local.get $ws)) (local.get $cursor)))
+    (i32.store (local.get $addr) (local.get $op))
+    (i32.store offset=4 (local.get $addr) (local.get $a))
+    (i32.store offset=8 (local.get $addr) (local.get $b))
+    (i32.store offset=12 (local.get $addr) (local.get $c))
+    (call $cw_set (local.get $ws) (global.get $CWH_CODE_CURSOR) (i32.add (local.get $cursor) (global.get $INSTRUCTION_SIZE)))
+    (i32.const 1))
+
+  ;; Node id for a child schema value: TRUE/FALSE for booleans, a fresh id
+  ;; for an object, -1 (diagnostic set) otherwise.
+  (func $child_id (param $ws i32) (param $frame i32) (param $voff i32) (param $keyword i32) (result i32)
+    (local $kind i32) (local $id i32)
+    (local.set $kind (call $mp_kind (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (call $schema_end (local.get $ws))))
+    (if (i32.eq (local.get $kind) (global.get $K_TRUE)) (then (return (global.get $TRUE_NODE))))
+    (if (i32.eq (local.get $kind) (global.get $K_FALSE)) (then (return (global.get $FALSE_NODE))))
+    (if (i32.ne (local.get $kind) (global.get $K_MAP))
+      (then (drop (call $diag (local.get $ws) (global.get $DIAG_SCHEMA_NOT_OBJECT) (local.get $keyword) (local.get $voff) (i32.const 0)))
+            (return (i32.const -1))))
+    (local.set $id (i32.add (call $cf (local.get $frame) (global.get $CF_CHILD_BASE)) (call $cf (local.get $frame) (global.get $CF_CHILD_NEXT))))
+    (call $cf_set (local.get $frame) (global.get $CF_CHILD_NEXT) (i32.add (call $cf (local.get $frame) (global.get $CF_CHILD_NEXT)) (i32.const 1)))
+    (if (i32.ge_u (local.get $id) (global.get $MAX_NODES))
+      (then (drop (call $diag (local.get $ws) (global.get $DIAG_NODE_COUNT) (local.get $keyword) (local.get $voff) (i32.const 0)))
+            (return (i32.const -1))))
+    (local.get $id))
+
+  ;; Schema value header at a schema-relative offset.
+  (func $sv (param $ws i32) (param $voff i32) (result i32 i32 i32)
+    (call $mp_header (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (call $schema_end (local.get $ws))))
+  (func $sv_skip (param $ws i32) (param $voff i32) (result i32)
+    (local $next i32)
+    (local.set $next (call $mp_skip (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (call $schema_end (local.get $ws))))
+    (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (i32.const -1))))
+    (i32.sub (local.get $next) (call $schema_addr (local.get $ws))))
+
+  ;; Non-negative integer keyword value → u32 (clamped), -1 on bad shape.
+  (func $limit_value (param $ws i32) (param $voff i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $addr i32) (local $f f64) (local $i i64)
+    (local.set $addr (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)))
+    (call $sv (local.get $ws) (local.get $voff)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.eq (local.get $kind) (global.get $K_INT))
+      (then
+        (if (i32.eq (call $mp_num_kind (local.get $addr)) (global.get $N_UINT)) (then (return (i32.const 0xffffffff))))
+        (local.set $i (call $mp_i64 (local.get $addr)))
+        (if (i64.lt_s (local.get $i) (i64.const 0)) (then (return (i32.const -1))))
+        (if (i64.gt_u (local.get $i) (i64.const 0xffffffff)) (then (return (i32.const 0xffffffff))))
+        (return (i32.wrap_i64 (local.get $i)))))
+    (if (i32.eq (local.get $kind) (global.get $K_FLOAT))
+      (then
+        (local.set $f (call $mp_f64 (local.get $addr)))
+        (if (i32.eqz (call $f64_is_integral (local.get $f))) (then (return (i32.const -1))))
+        (if (f64.lt (local.get $f) (f64.const 0.0)) (then (return (i32.const -1))))
+        (if (f64.ge (local.get $f) (f64.const 4294967295.0)) (then (return (i32.const 0xffffffff))))
+        (return (i32.trunc_f64_u (local.get $f)))))
+    (i32.const -1))
+
+  ;; --- pointer buffer -----------------------------------------------------------
+
+  (func $pointer_base (param $ws i32) (result i32)
+    (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_POINTER_OFFSET))))
+
+  (func $pointer_push_byte (param $ws i32) (param $b i32) (result i32)
+    (local $len i32)
+    (local.set $len (call $cw (local.get $ws) (global.get $CWH_POINTER_BYTES)))
+    (if (i32.ge_u (local.get $len) (global.get $MAX_POINTER_BYTES)) (then (return (i32.const 0))))
+    (i32.store8 (i32.add (call $pointer_base (local.get $ws)) (local.get $len)) (local.get $b))
+    (call $cw_set (local.get $ws) (global.get $CWH_POINTER_BYTES) (i32.add (local.get $len) (i32.const 1)))
+    (i32.const 1))
+
+  ;; Append "/" + escaped bytes.
+  (func $pointer_push_segment (param $ws i32) (param $addr i32) (param $len i32) (result i32)
+    (local $b i32)
+    (if (i32.eqz (call $pointer_push_byte (local.get $ws) (i32.const 0x2f))) (then (return (i32.const 0))))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.eqz (local.get $len)))
+        (local.set $b (i32.load8_u (local.get $addr)))
+        (if (i32.eq (local.get $b) (i32.const 0x7e))
+          (then
+            (if (i32.eqz (call $pointer_push_byte (local.get $ws) (i32.const 0x7e))) (then (return (i32.const 0))))
+            (local.set $b (i32.const 0x30))))
+        (if (i32.eq (local.get $b) (i32.const 0x2f))
+          (then
+            (if (i32.eqz (call $pointer_push_byte (local.get $ws) (i32.const 0x7e))) (then (return (i32.const 0))))
+            (local.set $b (i32.const 0x31))))
+        (if (i32.eqz (call $pointer_push_byte (local.get $ws) (local.get $b))) (then (return (i32.const 0))))
+        (local.set $addr (i32.add (local.get $addr) (i32.const 1)))
+        (local.set $len (i32.sub (local.get $len) (i32.const 1)))
+        (br $loop)))
+    (i32.const 1))
+
+  (func $pointer_push_keyword (param $ws i32) (param $code i32) (result i32)
+    (local $base i32) (local $entry i32)
+    (local.set $base (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_KEYWORD_TABLE_OFFSET))))
+    (local.set $entry (i32.add (i32.add (local.get $base) (global.get $CW_KEYWORD_INDEX)) (i32.shl (i32.sub (local.get $code) (i32.const 1)) (i32.const 3))))
+    (call $pointer_push_segment (local.get $ws) (i32.add (local.get $base) (i32.load (local.get $entry))) (i32.load offset=4 (local.get $entry))))
+
+  (func $pointer_push_index (param $ws i32) (param $v i32) (result i32)
+    (local $div i32) (local $started i32) (local $d i32)
+    (if (i32.eqz (call $pointer_push_byte (local.get $ws) (i32.const 0x2f))) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $v)) (then (return (call $pointer_push_byte (local.get $ws) (i32.const 0x30)))))
+    (local.set $div (i32.const 1000000000))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.eqz (local.get $div)))
+        (local.set $d (i32.div_u (local.get $v) (local.get $div)))
+        (if (i32.or (local.get $started) (local.get $d))
+          (then
+            (local.set $started (i32.const 1))
+            (if (i32.eqz (call $pointer_push_byte (local.get $ws) (i32.add (i32.const 0x30) (local.get $d)))) (then (return (i32.const 0))))))
+        (local.set $v (i32.rem_u (local.get $v) (local.get $div)))
+        (local.set $div (i32.div_u (local.get $div) (i32.const 10)))
+        (br $loop)))
+    (i32.const 1))
+
+  ;; --- node offset map (emission) -------------------------------------------------
+
+  (func $map_insert (param $ws i32) (param $voff i32) (param $id i32)
+    (local $cap i32) (local $base i32) (local $slot i32) (local $entry i32)
+    (local.set $cap (call $cw (local.get $ws) (global.get $CWH_MAP_CAPACITY)))
+    (if (i32.eqz (local.get $cap)) (then (return)))
+    (local.set $base (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_MAP_OFFSET))))
+    (local.set $slot (i32.and (call $mix32 (i32.const 0x1234567) (local.get $voff)) (i32.sub (local.get $cap) (i32.const 1))))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (local.set $entry (i32.add (local.get $base) (i32.shl (local.get $slot) (i32.const 3))))
+        (if (i32.eqz (i32.load (local.get $entry)))
+          (then
+            (i32.store (local.get $entry) (i32.add (local.get $voff) (i32.const 1)))
+            (i32.store offset=4 (local.get $entry) (local.get $id))
+            (br $done)))
+        (local.set $slot (i32.and (i32.add (local.get $slot) (i32.const 1)) (i32.sub (local.get $cap) (i32.const 1))))
+        (br $loop))))
+
+  (func $map_lookup (param $ws i32) (param $voff i32) (result i32)
+    (local $cap i32) (local $base i32) (local $slot i32) (local $entry i32) (local $probes i32)
+    (local.set $cap (call $cw (local.get $ws) (global.get $CWH_MAP_CAPACITY)))
+    (if (i32.eqz (local.get $cap)) (then (return (i32.const -1))))
+    (local.set $base (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_MAP_OFFSET))))
+    (local.set $slot (i32.and (call $mix32 (i32.const 0x1234567) (local.get $voff)) (i32.sub (local.get $cap) (i32.const 1))))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $probes) (local.get $cap)))
+        (local.set $entry (i32.add (local.get $base) (i32.shl (local.get $slot) (i32.const 3))))
+        (if (i32.eqz (i32.load (local.get $entry))) (then (return (i32.const -1))))
+        (if (i32.eq (i32.load (local.get $entry)) (i32.add (local.get $voff) (i32.const 1)))
+          (then (return (i32.load offset=4 (local.get $entry)))))
+        (local.set $slot (i32.and (i32.add (local.get $slot) (i32.const 1)) (i32.sub (local.get $cap) (i32.const 1))))
+        (local.set $probes (i32.add (local.get $probes) (i32.const 1)))
+        (br $loop)))
+    (i32.const -1))
+
+  ;; --- $ref resolution: local JSON pointers -----------------------------------------
+
+  (func $hex_value (param $b i32) (result i32)
+    (if (i32.and (i32.ge_u (local.get $b) (i32.const 0x30)) (i32.le_u (local.get $b) (i32.const 0x39)))
+      (then (return (i32.sub (local.get $b) (i32.const 0x30)))))
+    (if (i32.and (i32.ge_u (local.get $b) (i32.const 0x41)) (i32.le_u (local.get $b) (i32.const 0x46)))
+      (then (return (i32.sub (local.get $b) (i32.const 0x37)))))
+    (if (i32.and (i32.ge_u (local.get $b) (i32.const 0x61)) (i32.le_u (local.get $b) (i32.const 0x66)))
+      (then (return (i32.sub (local.get $b) (i32.const 0x57)))))
+    (i32.const -1))
+
+  ;; Decode one pointer segment (percent-decoding then ~1/~0) into the
+  ;; scratch area at the end of the pointer buffer region. Returns the
+  ;; decoded length or -1.
+  (func $decode_segment (param $ws i32) (param $addr i32) (param $len i32) (param $out i32) (result i32)
+    (local $end i32) (local $b i32) (local $n i32) (local $hi i32) (local $lo i32) (local $i i32) (local $p i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    ;; percent-decode into out
+    (block $d1
+      (loop $l1
+        (call $work_add (i32.const 1))
+        (br_if $d1 (i32.ge_u (local.get $addr) (local.get $end)))
+        (local.set $b (i32.load8_u (local.get $addr)))
+        (local.set $addr (i32.add (local.get $addr) (i32.const 1)))
+        (if (i32.eq (local.get $b) (i32.const 0x25))
+          (then
+            (if (i32.gt_u (i32.add (local.get $addr) (i32.const 2)) (local.get $end)) (then (return (i32.const -1))))
+            (local.set $hi (call $hex_value (i32.load8_u (local.get $addr))))
+            (local.set $lo (call $hex_value (i32.load8_u offset=1 (local.get $addr))))
+            (if (i32.or (i32.lt_s (local.get $hi) (i32.const 0)) (i32.lt_s (local.get $lo) (i32.const 0))) (then (return (i32.const -1))))
+            (local.set $b (i32.or (i32.shl (local.get $hi) (i32.const 4)) (local.get $lo)))
+            (local.set $addr (i32.add (local.get $addr) (i32.const 2)))))
+        (i32.store8 (i32.add (local.get $out) (local.get $n)) (local.get $b))
+        (local.set $n (i32.add (local.get $n) (i32.const 1)))
+        (br $l1)))
+    ;; ~1 → /, ~0 → ~ in place
+    (local.set $i (i32.const 0))
+    (local.set $p (i32.const 0))
+    (block $d2
+      (loop $l2
+        (call $work_add (i32.const 1))
+        (br_if $d2 (i32.ge_u (local.get $i) (local.get $n)))
+        (local.set $b (i32.load8_u (i32.add (local.get $out) (local.get $i))))
+        (if (i32.eq (local.get $b) (i32.const 0x7e))
+          (then
+            (if (i32.ge_u (i32.add (local.get $i) (i32.const 1)) (local.get $n)) (then (return (i32.const -1))))
+            (local.set $b (i32.load8_u (i32.add (local.get $out) (i32.add (local.get $i) (i32.const 1)))))
+            (if (i32.eq (local.get $b) (i32.const 0x31)) (then (local.set $b (i32.const 0x2f)))
+              (else (if (i32.eq (local.get $b) (i32.const 0x30)) (then (local.set $b (i32.const 0x7e)))
+                (else (return (i32.const -1))))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))))
+        (i32.store8 (i32.add (local.get $out) (local.get $p)) (local.get $b))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $l2)))
+    (local.get $p))
+
+  ;; Resolve "#..." to a schema-relative offset, or -1.
+  (func $resolve_local_ref (param $ws i32) (param $ref i32) (param $len i32) (result i32)
+    (local $end i32) (local $seg i32) (local $seg_end i32) (local $cur i32) (local $schema i32) (local $send i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $decoded i32) (local $scratch i32) (local $found i32)
+    (local $index i32) (local $i i32) (local $b i32)
+    (local.set $schema (call $schema_addr (local.get $ws)))
+    (local.set $send (call $schema_end (local.get $ws)))
+    (if (i32.eqz (local.get $len)) (then (return (i32.const -1))))
+    (if (i32.ne (i32.load8_u (local.get $ref)) (i32.const 0x23)) (then (return (i32.const -1))))
+    (if (i32.eq (local.get $len) (i32.const 1)) (then (return (i32.const 0))))
+    (if (i32.ne (i32.load8_u offset=1 (local.get $ref)) (i32.const 0x2f)) (then (return (i32.const -2))))
+    ;; decoded segments are staged past the live pointer text; both are
+    ;; bounded by MAX_POINTER_BYTES so the region is sized ×2 at init
+    (local.set $scratch (i32.add (call $pointer_base (local.get $ws)) (global.get $MAX_POINTER_BYTES)))
+    (local.set $cur (i32.const 0))
+    (local.set $seg (i32.add (local.get $ref) (i32.const 2)))
+    (local.set $end (i32.add (local.get $ref) (local.get $len)))
+    (block $done
+      (loop $loop
+        (local.set $seg_end (local.get $seg))
+        (block $find
+          (loop $fl
+            (br_if $find (i32.ge_u (local.get $seg_end) (local.get $end)))
+            (br_if $find (i32.eq (i32.load8_u (local.get $seg_end)) (i32.const 0x2f)))
+            (local.set $seg_end (i32.add (local.get $seg_end) (i32.const 1)))
+            (br $fl)))
+        (if (i32.gt_u (i32.sub (local.get $seg_end) (local.get $seg)) (global.get $MAX_POINTER_BYTES)) (then (return (i32.const -1))))
+        (local.set $decoded (call $decode_segment (local.get $ws) (local.get $seg) (i32.sub (local.get $seg_end) (local.get $seg)) (local.get $scratch)))
+        (if (i32.lt_s (local.get $decoded) (i32.const 0)) (then (return (i32.const -1))))
+        (call $mp_header (i32.add (local.get $schema) (local.get $cur)) (local.get $send)) (local.set $n) (local.set $h) (local.set $kind)
+        (if (i32.eq (local.get $kind) (global.get $K_MAP))
+          (then
+            (local.set $found (call $mp_map_find (i32.add (local.get $schema) (local.get $cur)) (local.get $send) (local.get $scratch) (local.get $decoded)))
+            (if (i32.lt_s (local.get $found) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $cur (i32.sub (local.get $found) (local.get $schema))))
+          (else
+            (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (i32.const -1))))
+            ;; decimal index, no leading zeros beyond "0"
+            (if (i32.eqz (local.get $decoded)) (then (return (i32.const -1))))
+            (if (i32.and (i32.gt_u (local.get $decoded) (i32.const 1)) (i32.eq (i32.load8_u (local.get $scratch)) (i32.const 0x30)))
+              (then (return (i32.const -1))))
+            (local.set $index (i32.const 0))
+            (local.set $i (i32.const 0))
+            (block $pd
+              (loop $pl
+                (br_if $pd (i32.ge_u (local.get $i) (local.get $decoded)))
+                (local.set $b (i32.load8_u (i32.add (local.get $scratch) (local.get $i))))
+                (if (i32.or (i32.lt_u (local.get $b) (i32.const 0x30)) (i32.gt_u (local.get $b) (i32.const 0x39))) (then (return (i32.const -1))))
+                (if (i32.gt_u (local.get $index) (i32.const 100000000)) (then (return (i32.const -1))))
+                (local.set $index (i32.add (i32.mul (local.get $index) (i32.const 10)) (i32.sub (local.get $b) (i32.const 0x30))))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $pl)))
+            (if (i32.ge_u (local.get $index) (local.get $n)) (then (return (i32.const -1))))
+            (local.set $found (i32.add (i32.add (local.get $schema) (local.get $cur)) (local.get $h)))
+            (local.set $i (i32.const 0))
+            (block $sd
+              (loop $sl
+                (br_if $sd (i32.ge_u (local.get $i) (local.get $index)))
+                (local.set $found (call $mp_skip (local.get $found) (local.get $send)))
+                (if (i32.lt_s (local.get $found) (i32.const 0)) (then (return (i32.const -1))))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $sl)))
+            (local.set $cur (i32.sub (local.get $found) (local.get $schema)))))
+        (br_if $done (i32.ge_u (local.get $seg_end) (local.get $end)))
+        (local.set $seg (i32.add (local.get $seg_end) (i32.const 1)))
+        (br $loop)))
+    (local.get $cur))
+
+  ;; --- workspace / frames -------------------------------------------------------------
+
+  (func $cw_check (param $ws i32) (param $cap i32) (result i32)
+    (if (i32.lt_u (local.get $cap) (global.get $CW_HEADER_SIZE)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (if (i32.ne (call $cw (local.get $ws) (global.get $CWH_MAGIC)) (global.get $CW_MAGIC)) (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.ne (call $cw (local.get $ws) (global.get $CWH_VERSION)) (global.get $CW_VERSION)) (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (global.get $STATUS_OK))
+
+  ;; Push a compile frame for the object schema at $voff with node id $id.
+  (func $cpush (param $ws i32) (param $voff i32) (param $id i32) (param $pointer_len i32) (result i32)
+    (local $count i32) (local $frame i32) (local $kind i32) (local $h i32) (local $n i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_FRAME_COUNT)))
+    (if (i32.ge_u (local.get $count) (call $cw (local.get $ws) (global.get $CWH_FRAME_CAPACITY)))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_DEPTH) (i32.const 0) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (call $sv (local.get $ws) (local.get $voff)) (local.set $n) (local.set $h) (local.set $kind)
+    (local.set $frame (call $cframe_at (local.get $ws) (local.get $count)))
+    (call $work_zero (local.get $frame) (i32.const 0) (global.get $CW_FRAME_SIZE))
+    (call $mark_visited (local.get $ws) (local.get $voff))
+    (call $cf_set (local.get $frame) (global.get $CF_VALUE) (local.get $voff))
+    (call $cf_set (local.get $frame) (global.get $CF_NODE_ID) (local.get $id))
+    (call $cf_set (local.get $frame) (global.get $CF_PHASE) (global.get $CP_COLLECT))
+    (call $cf_set (local.get $frame) (global.get $CF_CURSOR) (i32.add (local.get $voff) (local.get $h)))
+    (call $cf_set (local.get $frame) (global.get $CF_REMAINING) (local.get $n))
+    (call $cf_set (local.get $frame) (global.get $CF_POINTER_LEN) (local.get $pointer_len))
+    (call $cw_set (local.get $ws) (global.get $CWH_FRAME_COUNT) (i32.add (local.get $count) (i32.const 1)))
+    (if (i32.gt_u (i32.add (local.get $count) (i32.const 1)) (call $cw (local.get $ws) (global.get $CWH_MAX_DEPTH)))
+      (then (call $cw_set (local.get $ws) (global.get $CWH_MAX_DEPTH) (i32.add (local.get $count) (i32.const 1)))))
+    (global.get $STATUS_OK))
+
+  (func $mark_visited (param $ws i32) (param $voff i32)
+    (local $addr i32)
+    (local.set $addr (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_VISITED_OFFSET))) (i32.shr_u (local.get $voff) (i32.const 3))))
+    (i32.store8 (local.get $addr) (i32.or (i32.load8_u (local.get $addr)) (i32.shl (i32.const 1) (i32.and (local.get $voff) (i32.const 7))))))
+
+  (func $is_visited (param $ws i32) (param $voff i32) (result i32)
+    (i32.and (i32.shr_u (i32.load8_u (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_VISITED_OFFSET))) (i32.shr_u (local.get $voff) (i32.const 3))))
+                        (i32.and (local.get $voff) (i32.const 7)))
+             (i32.const 1)))
+
+  ;; Remember a $ref target that may live outside the keyword walk (inside
+  ;; an unknown keyword); drained as extra roots after the main walk.
+  (func $queue_extra (param $ws i32) (param $target i32) (param $ref_voff i32) (result i32)
+    (local $count i32) (local $entry i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_EXTRA_COUNT)))
+    (if (i32.ge_u (local.get $count) (global.get $CW_EXTRA_CAPACITY))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (global.get $KW_REF) (local.get $ref_voff) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (local.set $entry (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_EXTRA_OFFSET))) (i32.shl (local.get $count) (i32.const 3))))
+    (i32.store (local.get $entry) (local.get $target))
+    (i32.store offset=4 (local.get $entry) (local.get $ref_voff))
+    (call $cw_set (local.get $ws) (global.get $CWH_EXTRA_COUNT) (i32.add (local.get $count) (i32.const 1)))
+    (global.get $STATUS_OK))
+
+  ;; Push the next unvisited extra root, if any. Returns 1 when pushed.
+  (func $push_next_extra (param $ws i32) (result i32)
+    (local $cursor i32) (local $count i32) (local $entry i32) (local $target i32) (local $ref i32) (local $kind i32) (local $h i32) (local $n i32)
+    (local $id i32) (local $status i32)
+    (block $done
+      (loop $loop
+        (local.set $cursor (call $cw (local.get $ws) (global.get $CWH_EXTRA_CURSOR)))
+        (local.set $count (call $cw (local.get $ws) (global.get $CWH_EXTRA_COUNT)))
+        (br_if $done (i32.ge_u (local.get $cursor) (local.get $count)))
+        (call $work_add (i32.const 1))
+        (call $cw_set (local.get $ws) (global.get $CWH_EXTRA_CURSOR) (i32.add (local.get $cursor) (i32.const 1)))
+        (local.set $entry (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_EXTRA_OFFSET))) (i32.shl (local.get $cursor) (i32.const 3))))
+        (local.set $target (i32.load (local.get $entry)))
+        (local.set $ref (i32.load offset=4 (local.get $entry)))
+        (br_if $loop (call $is_visited (local.get $ws) (local.get $target)))
+        ;; pointer text = the $ref string itself ("#/...")
+        (call $sv (local.get $ws) (local.get $ref)) (local.set $n) (local.set $h) (local.set $kind)
+        (call $cw_set (local.get $ws) (global.get $CWH_POINTER_BYTES) (i32.const 0))
+        (if (i32.gt_u (local.get $n) (global.get $MAX_POINTER_BYTES)) (then (local.set $n (global.get $MAX_POINTER_BYTES))))
+        (call $work_copy (call $pointer_base (local.get $ws)) (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $ref)) (local.get $h)) (local.get $n))
+        (call $cw_set (local.get $ws) (global.get $CWH_POINTER_BYTES) (local.get $n))
+        (local.set $id (call $cw (local.get $ws) (global.get $CWH_NODE_COUNT)))
+        (call $cw_set (local.get $ws) (global.get $CWH_NODE_COUNT) (i32.add (local.get $id) (i32.const 1)))
+        (local.set $status (call $cpush (local.get $ws) (local.get $target) (local.get $id) (i32.const 0)))
+        (if (local.get $status) (then (return (i32.const -1))))
+        (call $cf_set (call $ctop (local.get $ws)) (global.get $CF_RESOURCE) (call $resource_for_offset (local.get $ws) (local.get $target) (local.get $ref)))
+        (return (i32.const 1))))
+    (i32.const 0))
+
+  ;; Resource of an extra root: a bundle document's own resource, else the
+  ;; resource the deferred reference (whose text sits at $ref) resolved to.
+  (func $resource_for_offset (param $ws i32) (param $voff i32) (param $ref i32) (result i32)
+    (local $i i32) (local $count i32) (local $d i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_RES_COUNT)))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (call $work_add (i32.const 1))
+      (if (i32.eq (i32.load offset=8 (call $res_addr (local.get $ws) (local.get $i))) (local.get $voff)) (then (return (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (local.set $i (i32.const 0))
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_DREF_COUNT)))
+    (block $dd (loop $dl
+      (br_if $dd (i32.ge_u (local.get $i) (local.get $count)))
+      (call $work_add (i32.const 1))
+      (local.set $d (call $dref_addr (local.get $ws) (local.get $i)))
+      (if (i32.and (i32.eq (i32.load (local.get $d)) (local.get $ref)) (i32.eq (i32.load offset=12 (local.get $d)) (local.get $voff)))
+        (then (return (i32.load offset=16 (local.get $d)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $dl)))
+    (i32.const 0))
+
+  (func $cpop (param $ws i32)
+    (local $frame i32)
+    (local.set $frame (call $ctop (local.get $ws)))
+    (call $cw_set (local.get $ws) (global.get $CWH_POINTER_BYTES) (call $cf (local.get $frame) (global.get $CF_POINTER_LEN)))
+    (call $cw_set (local.get $ws) (global.get $CWH_FRAME_COUNT) (i32.sub (call $cw (local.get $ws) (global.get $CWH_FRAME_COUNT)) (i32.const 1))))
+
+  ;; Slot value offset for a keyword, or -1 when absent.
+  (func $sl (param $frame i32) (param $code i32) (result i32)
+    (i32.sub (call $slot (local.get $frame) (local.get $code)) (i32.const 1)))
+
+  ;; --- COLLECT ----------------------------------------------------------------------
+
+  (func $collect_step (param $ws i32) (param $frame i32) (result i32)
+    (local $cursor i32) (local $kind i32) (local $h i32) (local $n i32) (local $key i32) (local $voff i32) (local $code i32) (local $next i32)
+    (if (i32.eqz (call $cf (local.get $frame) (global.get $CF_REMAINING)))
+      (then
+        (call $cf_set (local.get $frame) (global.get $CF_PHASE) (global.get $CP_GENERATE))
+        (call $cf_set (local.get $frame) (global.get $CF_KW_INDEX) (i32.const 0))
+        (return (global.get $STATUS_OK))))
+    (call $ccharge (local.get $ws) (i32.const 1))
+    (local.set $cursor (call $cf (local.get $frame) (global.get $CF_CURSOR)))
+    (call $sv (local.get $ws) (local.get $cursor)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_STR))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_KEYWORD_SHAPE) (i32.const 0) (local.get $cursor) (global.get $STATUS_SYNTAX_ERROR)))))
+    (local.set $key (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $cursor)) (local.get $h)))
+    (local.set $voff (i32.add (i32.add (local.get $cursor) (local.get $h)) (local.get $n)))
+    (local.set $code (call $keyword_code (local.get $ws) (local.get $key) (local.get $n)))
+    (if (local.get $code)
+      (then (i32.store (i32.add (i32.add (local.get $frame) (global.get $CF_SLOTS)) (i32.shl (local.get $code) (i32.const 2)))
+                       (i32.add (local.get $voff) (i32.const 1))))
+      (else
+        (if (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (global.get $OPT_STRICT))
+          (then (return (call $diag (local.get $ws) (global.get $DIAG_UNKNOWN_KEYWORD) (i32.const 0) (local.get $cursor) (global.get $STATUS_SYNTAX_ERROR)))))))
+    (local.set $next (call $sv_skip (local.get $ws) (local.get $voff)))
+    (if (i32.lt_s (local.get $next) (i32.const 0))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_KEYWORD_SHAPE) (local.get $code) (local.get $voff) (global.get $STATUS_SYNTAX_ERROR)))))
+    (call $cf_set (local.get $frame) (global.get $CF_CURSOR) (local.get $next))
+    (call $cf_set (local.get $frame) (global.get $CF_REMAINING) (i32.sub (call $cf (local.get $frame) (global.get $CF_REMAINING)) (i32.const 1)))
+    (global.get $STATUS_OK))
+
+  ;; --- GENERATE ---------------------------------------------------------------------
+
+  (func $shape_error (param $ws i32) (param $code i32) (param $voff i32) (result i32)
+    (call $diag (local.get $ws) (global.get $DIAG_KEYWORD_SHAPE) (local.get $code) (local.get $voff) (global.get $STATUS_SYNTAX_ERROR)))
+
+  (func $emit_or_fail (param $ws i32) (param $op i32) (param $a i32) (param $b i32) (param $c i32) (result i32)
+    (if (i32.eqz (call $emit_instruction (local.get $ws) (local.get $op) (local.get $a) (local.get $b) (local.get $c)))
+      (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (global.get $STATUS_OK))
+
+  ;; Pool value from a keyword slot that must be a number.
+  (func $number_operand (param $ws i32) (param $frame i32) (param $code i32) (result i32)
+    (local $voff i32) (local $kind i32) (local $off i32)
+    (local.set $voff (call $sl (local.get $frame) (local.get $code)))
+    (local.set $kind (call $mp_kind (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (call $schema_end (local.get $ws))))
+    (if (i32.eqz (i32.or (i32.eq (local.get $kind) (global.get $K_INT)) (i32.eq (local.get $kind) (global.get $K_FLOAT))))
+      (then (return (i32.const -1))))
+    (call $pool_value (local.get $ws) (local.get $voff)))
+
+  (func $slot_is_true (param $ws i32) (param $frame i32) (param $code i32) (result i32)
+    (local $voff i32)
+    (local.set $voff (call $sl (local.get $frame) (local.get $code)))
+    (if (i32.lt_s (local.get $voff) (i32.const 0)) (then (return (i32.const 0))))
+    (i32.eq (call $mp_kind (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (call $schema_end (local.get $ws))) (global.get $K_TRUE)))
+
+  (func $slot_kind (param $ws i32) (param $frame i32) (param $code i32) (result i32)
+    (local $voff i32)
+    (local.set $voff (call $sl (local.get $frame) (local.get $code)))
+    (if (i32.lt_s (local.get $voff) (i32.const 0)) (then (return (i32.const -2))))
+    (call $mp_kind (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (call $schema_end (local.get $ws))))
+
+  ;; Insert-or-find a key in the object table under construction. Returns
+  ;; the slot index (MEASURE: a running ordinal), or -1 on overflow.
+  (func $table_insert (param $ws i32) (param $frame i32) (param $key i32) (param $klen i32) (result i32)
+    (local $counter i32) (local $table i32) (local $cap i32) (local $entries i32) (local $slot i32) (local $entry i32) (local $hash i32)
+    (local $program i32) (local $keyrec i32) (local $probes i32)
+    (local.set $counter (call $cw (local.get $ws) (global.get $CWH_TABLE_COUNTER)))
+    (if (i32.eqz (call $emitting (local.get $ws)))
+      (then
+        (call $cw_set (local.get $ws) (global.get $CWH_TABLE_COUNTER) (i32.add (local.get $counter) (i32.const 1)))
+        (drop (call $pool_string (local.get $ws) (local.get $key) (local.get $klen)))
+        (return (local.get $counter))))
+    (local.set $program (call $prog (local.get $ws)))
+    (local.set $table (i32.add (local.get $program) (call $cf (local.get $frame) (global.get $CF_TABLE))))
+    (local.set $cap (i32.load offset=4 (local.get $table)))
+    (local.set $entries (i32.add (local.get $program) (i32.load offset=8 (local.get $table))))
+    (local.set $hash (call $fnv1a (local.get $key) (local.get $klen)))
+    (local.set $slot (i32.and (local.get $hash) (i32.sub (local.get $cap) (i32.const 1))))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (if (i32.ge_u (local.get $probes) (local.get $cap)) (then (return (i32.const -1))))
+        (local.set $entry (i32.add (local.get $entries) (i32.mul (local.get $slot) (global.get $OE_SIZE))))
+        (local.set $keyrec (i32.load offset=4 (local.get $entry)))
+        (if (i32.eq (local.get $keyrec) (global.get $NONE))
+          (then
+            (local.set $keyrec (call $pool_string (local.get $ws) (local.get $key) (local.get $klen)))
+            (if (i32.lt_s (local.get $keyrec) (i32.const 0)) (then (return (i32.const -1))))
+            (i32.store (local.get $entry) (local.get $hash))
+            (i32.store offset=4 (local.get $entry) (local.get $keyrec))
+            (i32.store offset=8 (local.get $entry) (global.get $NONE))
+            (i32.store offset=12 (local.get $entry) (local.get $counter))
+            (i32.store offset=16 (local.get $entry) (global.get $NONE))
+            (call $cw_set (local.get $ws) (global.get $CWH_TABLE_COUNTER) (i32.add (local.get $counter) (i32.const 1)))
+            (br $done)))
+        (if (i32.eq (i32.load (local.get $entry)) (local.get $hash))
+          (then
+            (if (i32.eq (i32.load (i32.add (local.get $program) (local.get $keyrec))) (local.get $klen))
+              (then
+                (if (call $bytes_equal (i32.add (i32.add (local.get $program) (local.get $keyrec)) (i32.const 4)) (local.get $key) (local.get $klen))
+                  (then (br $done)))))))
+        (local.set $slot (i32.and (i32.add (local.get $slot) (i32.const 1)) (i32.sub (local.get $cap) (i32.const 1))))
+        (local.set $probes (i32.add (local.get $probes) (i32.const 1)))
+        (br $loop)))
+    (local.get $slot))
+
+  (func $entry_addr (param $ws i32) (param $frame i32) (param $slot i32) (result i32)
+    (local $program i32) (local $table i32)
+    (local.set $program (call $prog (local.get $ws)))
+    (local.set $table (i32.add (local.get $program) (call $cf (local.get $frame) (global.get $CF_TABLE))))
+    (i32.add (i32.add (local.get $program) (i32.load offset=8 (local.get $table))) (i32.mul (local.get $slot) (global.get $OE_SIZE))))
+
+  ;; Count keys contributed by a map-of-lists keyword (dependentRequired /
+  ;; dependencies array form): 1 per key + list lengths. -1 on bad shape.
+  (func $count_map_keys (param $ws i32) (param $voff i32) (param $lists i32) (param $allow_schema i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $cur i32) (local $i i32) (local $total i32)
+    (local $vk i32) (local $vh i32) (local $vn i32) (local $j i32) (local $e i32) (local $ek i32) (local $eh i32) (local $en i32)
+    (call $sv (local.get $ws) (local.get $voff)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_MAP)) (then (return (i32.const -1))))
+    (local.set $cur (i32.add (local.get $voff) (local.get $h)))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+        (call $sv (local.get $ws) (local.get $cur)) (local.set $vn) (local.set $vh) (local.set $vk)
+        (if (i32.ne (local.get $vk) (global.get $K_STR)) (then (return (i32.const -1))))
+        (local.set $total (i32.add (local.get $total) (i32.const 1)))
+        (local.set $cur (i32.add (i32.add (local.get $cur) (local.get $vh)) (local.get $vn)))
+        (call $sv (local.get $ws) (local.get $cur)) (local.set $vn) (local.set $vh) (local.set $vk)
+        (if (local.get $lists)
+          (then
+            (if (i32.eq (local.get $vk) (global.get $K_ARRAY))
+              (then
+                (local.set $total (i32.add (local.get $total) (local.get $vn)))
+                (local.set $e (i32.add (local.get $cur) (local.get $vh)))
+                (local.set $j (i32.const 0))
+                (block $ld
+                  (loop $ll
+                    (call $work_add (i32.const 1))
+                    (br_if $ld (i32.ge_u (local.get $j) (local.get $vn)))
+                    (call $sv (local.get $ws) (local.get $e)) (local.set $en) (local.set $eh) (local.set $ek)
+                    (if (i32.ne (local.get $ek) (global.get $K_STR)) (then (return (i32.const -1))))
+                    (local.set $e (i32.add (i32.add (local.get $e) (local.get $eh)) (local.get $en)))
+                    (local.set $j (i32.add (local.get $j) (i32.const 1)))
+                    (br $ll))))
+              (else
+                (if (i32.eqz (local.get $allow_schema)) (then (return (i32.const -1))))
+                (if (i32.eqz (i32.or (i32.eq (local.get $vk) (global.get $K_MAP))
+                                     (i32.or (i32.eq (local.get $vk) (global.get $K_TRUE)) (i32.eq (local.get $vk) (global.get $K_FALSE)))))
+                  (then (return (i32.const -1)))))))
+          (else
+            (if (i32.eqz (i32.or (i32.eq (local.get $vk) (global.get $K_MAP))
+                                 (i32.or (i32.eq (local.get $vk) (global.get $K_TRUE)) (i32.eq (local.get $vk) (global.get $K_FALSE)))))
+              (then (return (i32.const -1))))))
+        (local.set $cur (call $sv_skip (local.get $ws) (local.get $cur)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (local.get $total))
+
+  ;; Count of string elements in an array keyword; -1 on bad shape.
+  (func $count_string_array (param $ws i32) (param $voff i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $cur i32) (local $i i32) (local $ek i32) (local $eh i32) (local $en i32)
+    (call $sv (local.get $ws) (local.get $voff)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (i32.const -1))))
+    (local.set $cur (i32.add (local.get $voff) (local.get $h)))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+        (call $sv (local.get $ws) (local.get $cur)) (local.set $en) (local.set $eh) (local.set $ek)
+        (if (i32.ne (local.get $ek) (global.get $K_STR)) (then (return (i32.const -1))))
+        (local.set $cur (i32.add (i32.add (local.get $cur) (local.get $eh)) (local.get $en)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (local.get $n))
+
+  ;; Process one map-of-dependencies keyword into the table. $legacy marks
+  ;; draft-7 `dependencies` (array or schema values); otherwise lists-only
+  ;; (dependentRequired) or schemas-only (dependentSchemas) per $lists.
+  (func $build_dependencies (param $ws i32) (param $frame i32) (param $code i32) (param $lists i32) (param $legacy i32) (result i32)
+    (local $voff i32) (local $kind i32) (local $h i32) (local $n i32) (local $cur i32) (local $i i32)
+    (local $key i32) (local $klen i32) (local $vk i32) (local $vh i32) (local $vn i32) (local $slot i32) (local $entry i32)
+    (local $dep i32) (local $e i32) (local $j i32) (local $ek i32) (local $eh i32) (local $en i32) (local $child i32) (local $existing i32)
+    (local.set $voff (call $sl (local.get $frame) (local.get $code)))
+    (if (i32.lt_s (local.get $voff) (i32.const 0)) (then (return (global.get $STATUS_OK))))
+    (call $sv (local.get $ws) (local.get $voff)) (local.set $n) (local.set $h) (local.set $kind)
+    (local.set $cur (i32.add (local.get $voff) (local.get $h)))
+    (block $done
+      (loop $loop
+        (call $work_add (i32.const 1))
+        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+        (call $sv (local.get $ws) (local.get $cur)) (local.set $vn) (local.set $vh) (local.set $vk)
+        (local.set $key (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $cur)) (local.get $vh)))
+        (local.set $klen (local.get $vn))
+        (local.set $cur (i32.add (i32.add (local.get $cur) (local.get $vh)) (local.get $vn)))
+        (local.set $slot (call $table_insert (local.get $ws) (local.get $frame) (local.get $key) (local.get $klen)))
+        (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (call $sv (local.get $ws) (local.get $cur)) (local.set $vn) (local.set $vh) (local.set $vk)
+        (if (i32.eq (local.get $vk) (global.get $K_ARRAY))
+          (then
+            (local.set $dep (call $pool_alloc (local.get $ws) (i32.add (i32.const 8) (i32.shl (local.get $vn) (i32.const 2)))))
+            (if (i32.lt_s (local.get $dep) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+            (call $pool_set (local.get $ws) (local.get $dep) (global.get $DEP_REQUIRED_COUNT)
+              (i32.or (local.get $vn) (select (i32.const 0x80000000) (i32.const 0) (local.get $legacy))))
+            (call $pool_set (local.get $ws) (local.get $dep) (global.get $DEP_SCHEMA_NODE) (global.get $NONE))
+            (local.set $e (i32.add (local.get $cur) (local.get $vh)))
+            (local.set $j (i32.const 0))
+            (block $ld
+              (loop $ll
+                (call $work_add (i32.const 1))
+                (br_if $ld (i32.ge_u (local.get $j) (local.get $vn)))
+                (call $sv (local.get $ws) (local.get $e)) (local.set $en) (local.set $eh) (local.set $ek)
+                (local.set $existing (call $table_insert (local.get $ws) (local.get $frame)
+                  (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $e)) (local.get $eh)) (local.get $en)))
+                (if (i32.lt_s (local.get $existing) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+                (call $pool_set (local.get $ws) (local.get $dep) (i32.add (global.get $DEP_ENTRIES) (i32.shl (local.get $j) (i32.const 2))) (local.get $existing))
+                (local.set $e (i32.add (i32.add (local.get $e) (local.get $eh)) (local.get $en)))
+                (local.set $j (i32.add (local.get $j) (i32.const 1)))
+                (br $ll)))
+            (if (call $emitting (local.get $ws))
+              (then
+                (local.set $entry (call $entry_addr (local.get $ws) (local.get $frame) (local.get $slot)))
+                (local.set $existing (i32.load offset=16 (local.get $entry)))
+                ;; a schema-only record already there keeps its node
+                (if (i32.ne (local.get $existing) (global.get $NONE))
+                  (then (call $pool_set (local.get $ws) (local.get $dep) (global.get $DEP_SCHEMA_NODE)
+                          (call $pool_get (local.get $ws) (local.get $existing) (global.get $DEP_SCHEMA_NODE)))))
+                (i32.store offset=16 (local.get $entry) (local.get $dep)))))
+          (else
+            (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $cur) (local.get $code)))
+            (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+            (if (call $emitting (local.get $ws))
+              (then
+                (local.set $entry (call $entry_addr (local.get $ws) (local.get $frame) (local.get $slot)))
+                (local.set $existing (i32.load offset=16 (local.get $entry)))
+                (if (i32.ne (local.get $existing) (global.get $NONE))
+                  (then (call $pool_set (local.get $ws) (local.get $existing) (global.get $DEP_SCHEMA_NODE) (local.get $child)))
+                  (else
+                    (local.set $dep (call $pool_alloc (local.get $ws) (i32.const 8)))
+                    (if (i32.lt_s (local.get $dep) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+                    (call $pool_set (local.get $ws) (local.get $dep) (global.get $DEP_REQUIRED_COUNT) (i32.const 0))
+                    (call $pool_set (local.get $ws) (local.get $dep) (global.get $DEP_SCHEMA_NODE) (local.get $child))
+                    (i32.store offset=16 (local.get $entry) (local.get $dep)))))
+              (else
+                (drop (call $pool_alloc (local.get $ws) (i32.const 8)))))))
+        (local.set $cur (call $sv_skip (local.get $ws) (local.get $cur)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (global.get $STATUS_OK))
+
+  ;; GS_OBJECT: fuse properties/required/additionalProperties/propertyNames/
+  ;; dependent* into one table and emit OBJECT_PASS.
+  (func $generate_object (param $ws i32) (param $frame i32) (result i32)
+    (local $props i32) (local $required i32) (local $additional i32) (local $names i32) (local $dreq i32) (local $dsch i32) (local $deps i32)
+    (local $total i32) (local $c i32) (local $cap i32) (local $table i32) (local $entries i32) (local $status i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $cur i32) (local $i i32) (local $vk i32) (local $vh i32) (local $vn i32)
+    (local $key i32) (local $klen i32) (local $slot i32) (local $child i32) (local $list i32) (local $entry i32)
+    (local $patterns i32) (local $rec i32)
+    (local.set $props (call $sl (local.get $frame) (global.get $KW_PROPERTIES)))
+    (local.set $required (call $sl (local.get $frame) (global.get $KW_REQUIRED)))
+    (local.set $additional (call $sl (local.get $frame) (global.get $KW_ADDITIONAL_PROPERTIES)))
+    (local.set $names (call $sl (local.get $frame) (global.get $KW_PROPERTY_NAMES)))
+    (local.set $dreq (call $sl (local.get $frame) (global.get $KW_DEPENDENT_REQUIRED)))
+    (local.set $dsch (call $sl (local.get $frame) (global.get $KW_DEPENDENT_SCHEMAS)))
+    (local.set $deps (call $sl (local.get $frame) (global.get $KW_DEPENDENCIES)))
+    (local.set $patterns (call $sl (local.get $frame) (global.get $KW_PATTERN_PROPERTIES)))
+    (if (i32.and (i32.and (i32.lt_s (local.get $props) (i32.const 0)) (i32.lt_s (local.get $required) (i32.const 0)))
+                 (i32.and (i32.and (i32.lt_s (local.get $additional) (i32.const 0)) (i32.lt_s (local.get $names) (i32.const 0)))
+                          (i32.and (i32.and (i32.lt_s (local.get $dreq) (i32.const 0)) (i32.lt_s (local.get $patterns) (i32.const 0)))
+                                   (i32.and (i32.lt_s (local.get $dsch) (i32.const 0)) (i32.lt_s (local.get $deps) (i32.const 0))))))
+      (then (return (global.get $STATUS_OK))))
+    ;; total keys (upper bound; dedup happens at insert)
+    (if (i32.ge_s (local.get $props) (i32.const 0))
+      (then
+        (local.set $c (call $count_map_keys (local.get $ws) (local.get $props) (i32.const 0) (i32.const 1)))
+        (if (i32.lt_s (local.get $c) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_PROPERTIES) (local.get $props)))))
+        (local.set $total (i32.add (local.get $total) (local.get $c)))))
+    (if (i32.ge_s (local.get $required) (i32.const 0))
+      (then
+        (local.set $c (call $count_string_array (local.get $ws) (local.get $required)))
+        (if (i32.lt_s (local.get $c) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_REQUIRED) (local.get $required)))))
+        (local.set $total (i32.add (local.get $total) (local.get $c)))))
+    (if (i32.ge_s (local.get $dreq) (i32.const 0))
+      (then
+        (local.set $c (call $count_map_keys (local.get $ws) (local.get $dreq) (i32.const 1) (i32.const 0)))
+        (if (i32.lt_s (local.get $c) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_DEPENDENT_REQUIRED) (local.get $dreq)))))
+        (local.set $total (i32.add (local.get $total) (local.get $c)))))
+    (if (i32.ge_s (local.get $dsch) (i32.const 0))
+      (then
+        (local.set $c (call $count_map_keys (local.get $ws) (local.get $dsch) (i32.const 0) (i32.const 1)))
+        (if (i32.lt_s (local.get $c) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_DEPENDENT_SCHEMAS) (local.get $dsch)))))
+        (local.set $total (i32.add (local.get $total) (local.get $c)))))
+    (if (i32.ge_s (local.get $deps) (i32.const 0))
+      (then
+        (local.set $c (call $count_map_keys (local.get $ws) (local.get $deps) (i32.const 1) (i32.const 1)))
+        (if (i32.lt_s (local.get $c) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_DEPENDENCIES) (local.get $deps)))))
+        (local.set $total (i32.add (local.get $total) (local.get $c)))))
+    (if (i32.gt_u (local.get $total) (global.get $MAX_KEY_TABLE_ENTRIES))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (global.get $KW_PROPERTIES) (local.get $props) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (local.set $cap (i32.const 0))
+    (if (local.get $total)
+      (then
+        (local.set $cap (i32.const 4))
+        (block $cd (loop $cl
+          (call $work_add (i32.const 1))
+          (br_if $cd (i32.ge_u (local.get $cap) (i32.shl (local.get $total) (i32.const 1))))
+          (local.set $cap (i32.shl (local.get $cap) (i32.const 1)))
+          (br $cl)))))
+    (local.set $table (call $pool_alloc (local.get $ws) (global.get $OT_SIZE)))
+    (if (i32.lt_s (local.get $table) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (local.set $entries (call $pool_alloc (local.get $ws) (i32.mul (local.get $cap) (global.get $OE_SIZE))))
+    (if (i32.lt_s (local.get $entries) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (call $cf_set (local.get $frame) (global.get $CF_TABLE) (local.get $table))
+    (call $cw_set (local.get $ws) (global.get $CWH_TABLE_COUNTER) (i32.const 0))
+    (if (call $emitting (local.get $ws))
+      (then
+        (call $work_zero (i32.add (call $prog (local.get $ws)) (local.get $entries)) (i32.const 0xff) (i32.mul (local.get $cap) (global.get $OE_SIZE)))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_CAPACITY) (local.get $cap))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_ENTRIES_OFFSET) (local.get $entries))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_REQUIRED_LIST) (global.get $NONE))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_ADDITIONAL_NODE) (global.get $NONE))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_PROPERTY_NAMES_NODE) (global.get $NONE))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_PATTERN_COUNT) (i32.const 0))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_PATTERN_LIST) (global.get $NONE))))
+    ;; properties (child order: first)
+    (if (i32.ge_s (local.get $props) (i32.const 0))
+      (then
+        (call $sv (local.get $ws) (local.get $props)) (local.set $n) (local.set $h) (local.set $kind)
+        (local.set $cur (i32.add (local.get $props) (local.get $h)))
+        (local.set $i (i32.const 0))
+        (block $pd (loop $pl
+          (call $work_add (i32.const 1))
+          (br_if $pd (i32.ge_u (local.get $i) (local.get $n)))
+          (call $sv (local.get $ws) (local.get $cur)) (local.set $vn) (local.set $vh) (local.set $vk)
+          (local.set $key (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $cur)) (local.get $vh)))
+          (local.set $klen (local.get $vn))
+          (local.set $cur (i32.add (i32.add (local.get $cur) (local.get $vh)) (local.get $vn)))
+          (local.set $slot (call $table_insert (local.get $ws) (local.get $frame) (local.get $key) (local.get $klen)))
+          (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+          (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $cur) (global.get $KW_PROPERTIES)))
+          (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+          (if (call $emitting (local.get $ws))
+            (then (i32.store offset=8 (call $entry_addr (local.get $ws) (local.get $frame) (local.get $slot)) (local.get $child))))
+          (local.set $cur (call $sv_skip (local.get $ws) (local.get $cur)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $pl)))))
+    ;; patternProperties (child order: second): list of [regex record, child]
+    (if (i32.ge_s (local.get $patterns) (i32.const 0))
+      (then
+        (call $sv (local.get $ws) (local.get $patterns)) (local.set $n) (local.set $h) (local.set $kind)
+        (if (i32.ne (local.get $kind) (global.get $K_MAP)) (then (return (call $shape_error (local.get $ws) (global.get $KW_PATTERN_PROPERTIES) (local.get $patterns)))))
+        (local.set $list (call $pool_alloc (local.get $ws) (i32.add (i32.const 4) (i32.shl (local.get $n) (i32.const 3)))))
+        (if (i32.lt_s (local.get $list) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (call $pool_set (local.get $ws) (local.get $list) (i32.const 0) (local.get $n))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_PATTERN_COUNT) (local.get $n))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_PATTERN_LIST) (local.get $list))
+        (local.set $cur (i32.add (local.get $patterns) (local.get $h)))
+        (local.set $i (i32.const 0))
+        (block $ppd (loop $ppl
+          (call $work_add (i32.const 1))
+          (br_if $ppd (i32.ge_u (local.get $i) (local.get $n)))
+          (local.set $rec (call $compile_regex (local.get $ws) (local.get $frame) (global.get $KW_PATTERN_PROPERTIES) (local.get $cur)))
+          (if (i32.lt_s (local.get $rec) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $rec)))))
+          (local.set $cur (call $sv_skip (local.get $ws) (local.get $cur)))
+          (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $cur) (global.get $KW_PATTERN_PROPERTIES)))
+          (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+          (call $pool_set (local.get $ws) (local.get $list) (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 3))) (local.get $rec))
+          (call $pool_set (local.get $ws) (local.get $list) (i32.add (i32.const 8) (i32.shl (local.get $i) (i32.const 3))) (local.get $child))
+          (local.set $cur (call $sv_skip (local.get $ws) (local.get $cur)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $ppl)))))
+    ;; additionalProperties, propertyNames (child order: third, fourth)
+    (if (i32.ge_s (local.get $additional) (i32.const 0))
+      (then
+        (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $additional) (global.get $KW_ADDITIONAL_PROPERTIES)))
+        (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_ADDITIONAL_NODE) (local.get $child))))
+    (if (i32.ge_s (local.get $names) (i32.const 0))
+      (then
+        (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $names) (global.get $KW_PROPERTY_NAMES)))
+        (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_PROPERTY_NAMES_NODE) (local.get $child))))
+    ;; required
+    (if (i32.ge_s (local.get $required) (i32.const 0))
+      (then
+        (call $sv (local.get $ws) (local.get $required)) (local.set $n) (local.set $h) (local.set $kind)
+        (local.set $list (call $pool_list (local.get $ws) (local.get $n)))
+        (if (i32.lt_s (local.get $list) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_REQUIRED_LIST) (local.get $list))
+        (local.set $cur (i32.add (local.get $required) (local.get $h)))
+        (local.set $i (i32.const 0))
+        (block $rd (loop $rl
+          (call $work_add (i32.const 1))
+          (br_if $rd (i32.ge_u (local.get $i) (local.get $n)))
+          (call $sv (local.get $ws) (local.get $cur)) (local.set $vn) (local.set $vh) (local.set $vk)
+          (local.set $slot (call $table_insert (local.get $ws) (local.get $frame)
+            (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $cur)) (local.get $vh)) (local.get $vn)))
+          (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+          (call $pool_list_set (local.get $ws) (local.get $list) (local.get $i) (local.get $slot))
+          (local.set $cur (i32.add (i32.add (local.get $cur) (local.get $vh)) (local.get $vn)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $rl)))))
+    ;; dependentRequired (no children), dependentSchemas, dependencies (child order: fourth, fifth)
+    (local.set $status (call $build_dependencies (local.get $ws) (local.get $frame) (global.get $KW_DEPENDENT_REQUIRED) (i32.const 1) (i32.const 0)))
+    (if (local.get $status) (then (return (local.get $status))))
+    (local.set $status (call $build_dependencies (local.get $ws) (local.get $frame) (global.get $KW_DEPENDENT_SCHEMAS) (i32.const 0) (i32.const 0)))
+    (if (local.get $status) (then (return (local.get $status))))
+    (local.set $status (call $build_dependencies (local.get $ws) (local.get $frame) (global.get $KW_DEPENDENCIES) (i32.const 1) (i32.const 1)))
+    (if (local.get $status) (then (return (local.get $status))))
+    (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_ENTRY_COUNT) (call $cw (local.get $ws) (global.get $CWH_TABLE_COUNTER)))
+    (call $pool_set (local.get $ws) (local.get $table) (global.get $OT_BIT_COUNT) (call $cw (local.get $ws) (global.get $CWH_TABLE_COUNTER)))
+    (call $emit_or_fail (local.get $ws) (global.get $OP_OBJECT_PASS) (local.get $table) (i32.const 0) (i32.const 0)))
+
+  ;; Which array carries the tuple: prefixItems, else items when it is an
+  ;; array. Returns the slot offset or -1.
+  (func $tuple_source (param $ws i32) (param $frame i32) (result i32)
+    (local $v i32)
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_PREFIX_ITEMS)))
+    (if (i32.ge_s (local.get $v) (i32.const 0)) (then (return (local.get $v))))
+    (if (i32.eq (call $slot_kind (local.get $ws) (local.get $frame) (global.get $KW_ITEMS)) (global.get $K_ARRAY))
+      (then (return (call $sl (local.get $frame) (global.get $KW_ITEMS)))))
+    (i32.const -1))
+
+  (func $generate_array (param $ws i32) (param $frame i32) (result i32)
+    (local $tuple i32) (local $items i32) (local $additional i32) (local $contains i32) (local $minc i32) (local $maxc i32) (local $unique i32)
+    (local $table i32) (local $kind i32) (local $h i32) (local $n i32) (local $cur i32) (local $i i32) (local $child i32) (local $list i32)
+    (local $items_kind i32) (local $limit i32) (local $flags i32)
+    (local.set $tuple (call $tuple_source (local.get $ws) (local.get $frame)))
+    (local.set $items (call $sl (local.get $frame) (global.get $KW_ITEMS)))
+    (local.set $items_kind (call $slot_kind (local.get $ws) (local.get $frame) (global.get $KW_ITEMS)))
+    (local.set $additional (call $sl (local.get $frame) (global.get $KW_ADDITIONAL_ITEMS)))
+    (local.set $contains (call $sl (local.get $frame) (global.get $KW_CONTAINS)))
+    (local.set $minc (call $sl (local.get $frame) (global.get $KW_MIN_CONTAINS)))
+    (local.set $maxc (call $sl (local.get $frame) (global.get $KW_MAX_CONTAINS)))
+    (local.set $unique (call $slot_is_true (local.get $ws) (local.get $frame) (global.get $KW_UNIQUE_ITEMS)))
+    (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_UNIQUE_ITEMS)) (i32.const 0))
+      (then
+        (local.set $kind (call $slot_kind (local.get $ws) (local.get $frame) (global.get $KW_UNIQUE_ITEMS)))
+        (if (i32.eqz (i32.or (i32.eq (local.get $kind) (global.get $K_TRUE)) (i32.eq (local.get $kind) (global.get $K_FALSE))))
+          (then (return (call $shape_error (local.get $ws) (global.get $KW_UNIQUE_ITEMS) (call $sl (local.get $frame) (global.get $KW_UNIQUE_ITEMS))))))))
+    (if (i32.and (i32.and (i32.lt_s (local.get $tuple) (i32.const 0)) (i32.lt_s (local.get $items) (i32.const 0)))
+                 (i32.and (i32.lt_s (local.get $contains) (i32.const 0)) (i32.eqz (local.get $unique))))
+      (then (return (global.get $STATUS_OK))))
+    ;; items array beside prefixItems is ambiguous
+    (if (i32.and (i32.ge_s (call $sl (local.get $frame) (global.get $KW_PREFIX_ITEMS)) (i32.const 0)) (i32.eq (local.get $items_kind) (global.get $K_ARRAY)))
+      (then (return (call $shape_error (local.get $ws) (global.get $KW_ITEMS) (local.get $items)))))
+    (local.set $table (call $pool_alloc (local.get $ws) (global.get $AT_SIZE)))
+    (if (i32.lt_s (local.get $table) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (call $cf_set (local.get $frame) (global.get $CF_ATABLE) (local.get $table))
+    (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_PREFIX_LIST) (global.get $NONE))
+    (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_ITEMS_NODE) (global.get $NONE))
+    (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_CONTAINS_NODE) (global.get $NONE))
+    (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_MIN_CONTAINS) (i32.const 1))
+    (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_MAX_CONTAINS) (global.get $NONE))
+    (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_UNIQUE) (local.get $unique))
+    ;; tuple (child order: first)
+    (if (i32.ge_s (local.get $tuple) (i32.const 0))
+      (then
+        (call $sv (local.get $ws) (local.get $tuple)) (local.set $n) (local.set $h) (local.set $kind)
+        (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (call $shape_error (local.get $ws) (global.get $KW_PREFIX_ITEMS) (local.get $tuple)))))
+        (local.set $list (call $pool_list (local.get $ws) (local.get $n)))
+        (if (i32.lt_s (local.get $list) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_PREFIX_COUNT) (local.get $n))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_PREFIX_LIST) (local.get $list))
+        (local.set $cur (i32.add (local.get $tuple) (local.get $h)))
+        (local.set $i (i32.const 0))
+        (block $td (loop $tl
+          (call $work_add (i32.const 1))
+          (br_if $td (i32.ge_u (local.get $i) (local.get $n)))
+          (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $cur) (global.get $KW_PREFIX_ITEMS)))
+          (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+          (call $pool_list_set (local.get $ws) (local.get $list) (local.get $i) (local.get $child))
+          (local.set $cur (call $sv_skip (local.get $ws) (local.get $cur)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $tl)))))
+    ;; items schema form (child order: second), additionalItems (third)
+    (if (i32.and (i32.ge_s (local.get $items) (i32.const 0)) (i32.ne (local.get $items_kind) (global.get $K_ARRAY)))
+      (then
+        (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $items) (global.get $KW_ITEMS)))
+        (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_ITEMS_NODE) (local.get $child))))
+    (if (i32.and (i32.ge_s (local.get $additional) (i32.const 0)) (i32.eq (local.get $items_kind) (global.get $K_ARRAY)))
+      (then
+        (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $additional) (global.get $KW_ADDITIONAL_ITEMS)))
+        (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_ITEMS_NODE) (local.get $child))))
+    ;; contains (fourth)
+    (if (i32.ge_s (local.get $contains) (i32.const 0))
+      (then
+        (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $contains) (global.get $KW_CONTAINS)))
+        (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_CONTAINS_NODE) (local.get $child))
+        (if (i32.ge_s (local.get $minc) (i32.const 0))
+          (then
+            (local.set $limit (call $limit_value (local.get $ws) (local.get $minc)))
+            (if (i32.lt_s (local.get $limit) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_MIN_CONTAINS) (local.get $minc)))))
+            (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_MIN_CONTAINS) (local.get $limit))
+            (local.set $flags (i32.const 1))))
+        (if (i32.ge_s (local.get $maxc) (i32.const 0))
+          (then
+            (local.set $limit (call $limit_value (local.get $ws) (local.get $maxc)))
+            (if (i32.lt_s (local.get $limit) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_MAX_CONTAINS) (local.get $maxc)))))
+            (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_MAX_CONTAINS) (local.get $limit))))))
+    (call $pool_set (local.get $ws) (local.get $table) (global.get $AT_FLAGS) (local.get $flags))
+    (call $emit_or_fail (local.get $ws) (global.get $OP_ARRAY_PASS) (local.get $table) (i32.const 0) (i32.const 0)))
+
+  ;; allOf / anyOf / oneOf list → pool node list; returns list or -1.
+  (func $schema_list (param $ws i32) (param $frame i32) (param $code i32) (result i32)
+    (local $voff i32) (local $kind i32) (local $h i32) (local $n i32) (local $cur i32) (local $i i32) (local $child i32) (local $list i32)
+    (local.set $voff (call $sl (local.get $frame) (local.get $code)))
+    (call $sv (local.get $ws) (local.get $voff)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (i32.const -1))))
+    (if (i32.eqz (local.get $n)) (then (return (i32.const -1))))
+    (local.set $list (call $pool_list (local.get $ws) (local.get $n)))
+    (if (i32.lt_s (local.get $list) (i32.const 0)) (then (return (i32.const -2))))
+    (local.set $cur (i32.add (local.get $voff) (local.get $h)))
+    (block $done (loop $loop
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $cur) (local.get $code)))
+      (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (i32.const -3))))
+      (call $pool_list_set (local.get $ws) (local.get $list) (local.get $i) (local.get $child))
+      (local.set $cur (call $sv_skip (local.get $ws) (local.get $cur)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)))
+    (local.get $list))
+
+  (func $generate_logic (param $ws i32) (param $frame i32) (result i32)
+    (local $list i32) (local $status i32) (local $v i32) (local $if_id i32) (local $then_id i32) (local $else_id i32)
+    (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_ALL_OF)) (i32.const 0))
+      (then
+        (local.set $list (call $schema_list (local.get $ws) (local.get $frame) (global.get $KW_ALL_OF)))
+        (if (i32.eq (local.get $list) (i32.const -1)) (then (return (call $shape_error (local.get $ws) (global.get $KW_ALL_OF) (call $sl (local.get $frame) (global.get $KW_ALL_OF))))))
+        (if (i32.eq (local.get $list) (i32.const -2)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (if (i32.lt_s (local.get $list) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (local.set $status (call $emit_or_fail (local.get $ws) (global.get $OP_ALL_OF) (local.get $list) (i32.const 0) (i32.const 0)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_ANY_OF)) (i32.const 0))
+      (then
+        (local.set $list (call $schema_list (local.get $ws) (local.get $frame) (global.get $KW_ANY_OF)))
+        (if (i32.eq (local.get $list) (i32.const -1)) (then (return (call $shape_error (local.get $ws) (global.get $KW_ANY_OF) (call $sl (local.get $frame) (global.get $KW_ANY_OF))))))
+        (if (i32.eq (local.get $list) (i32.const -2)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (if (i32.lt_s (local.get $list) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (local.set $status (call $emit_or_fail (local.get $ws) (global.get $OP_ANY_OF) (local.get $list) (i32.const 0) (i32.const 0)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_ONE_OF)) (i32.const 0))
+      (then
+        (local.set $list (call $schema_list (local.get $ws) (local.get $frame) (global.get $KW_ONE_OF)))
+        (if (i32.eq (local.get $list) (i32.const -1)) (then (return (call $shape_error (local.get $ws) (global.get $KW_ONE_OF) (call $sl (local.get $frame) (global.get $KW_ONE_OF))))))
+        (if (i32.eq (local.get $list) (i32.const -2)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (if (i32.lt_s (local.get $list) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (local.set $status (call $emit_or_fail (local.get $ws) (global.get $OP_ONE_OF) (local.get $list) (i32.const 0) (i32.const 0)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_NOT)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (local.set $v (call $child_id (local.get $ws) (local.get $frame) (local.get $v) (global.get $KW_NOT)))
+        (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (local.set $status (call $emit_or_fail (local.get $ws) (global.get $OP_NOT) (local.get $v) (i32.const 0) (i32.const 0)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (local.set $if_id (global.get $NONE))
+    (local.set $then_id (global.get $NONE))
+    (local.set $else_id (global.get $NONE))
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_IF)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (local.set $if_id (call $child_id (local.get $ws) (local.get $frame) (local.get $v) (global.get $KW_IF)))
+        (if (i32.lt_s (local.get $if_id) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))))
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_THEN)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (local.set $then_id (call $child_id (local.get $ws) (local.get $frame) (local.get $v) (global.get $KW_THEN)))
+        (if (i32.lt_s (local.get $then_id) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))))
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_ELSE)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (local.set $else_id (call $child_id (local.get $ws) (local.get $frame) (local.get $v) (global.get $KW_ELSE)))
+        (if (i32.lt_s (local.get $else_id) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))))
+    (if (i32.ne (local.get $if_id) (global.get $NONE))
+      (then (return (call $emit_or_fail (local.get $ws) (global.get $OP_IF) (local.get $if_id) (local.get $then_id) (local.get $else_id)))))
+    (global.get $STATUS_OK))
+
+  (func $generate_unevaluated (param $ws i32) (param $frame i32) (result i32)
+    (local $v i32) (local $child i32) (local $s i32)
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_UNEVALUATED_PROPERTIES)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $v) (global.get $KW_UNEVALUATED_PROPERTIES)))
+        (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (local.set $s (call $emit_or_fail (local.get $ws) (global.get $OP_UNEVALUATED_PROPERTIES) (local.get $child) (i32.const 0) (i32.const 0)))
+        (if (local.get $s) (then (return (local.get $s))))))
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_UNEVALUATED_ITEMS)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (local.set $child (call $child_id (local.get $ws) (local.get $frame) (local.get $v) (global.get $KW_UNEVALUATED_ITEMS)))
+        (if (i32.lt_s (local.get $child) (i32.const 0)) (then (return (global.get $STATUS_SYNTAX_ERROR))))
+        (return (call $emit_or_fail (local.get $ws) (global.get $OP_UNEVALUATED_ITEMS) (local.get $child) (i32.const 0) (i32.const 0)))))
+    (global.get $STATUS_OK))
+
+  (func $generate_numeric (param $ws i32) (param $frame i32) (result i32)
+    (local $v i32) (local $status i32) (local $excl_min_bool i32) (local $excl_max_bool i32) (local $k i32)
+    ;; draft-04 boolean exclusive flags
+    (local.set $k (call $slot_kind (local.get $ws) (local.get $frame) (global.get $KW_EXCLUSIVE_MINIMUM)))
+    (if (i32.or (i32.eq (local.get $k) (global.get $K_TRUE)) (i32.eq (local.get $k) (global.get $K_FALSE)))
+      (then (local.set $excl_min_bool (i32.add (i32.const 1) (i32.eq (local.get $k) (global.get $K_TRUE))))))
+    (local.set $k (call $slot_kind (local.get $ws) (local.get $frame) (global.get $KW_EXCLUSIVE_MAXIMUM)))
+    (if (i32.or (i32.eq (local.get $k) (global.get $K_TRUE)) (i32.eq (local.get $k) (global.get $K_FALSE)))
+      (then (local.set $excl_max_bool (i32.add (i32.const 1) (i32.eq (local.get $k) (global.get $K_TRUE))))))
+    (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_MINIMUM)) (i32.const 0))
+      (then
+        (local.set $v (call $number_operand (local.get $ws) (local.get $frame) (global.get $KW_MINIMUM)))
+        (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_MINIMUM) (call $sl (local.get $frame) (global.get $KW_MINIMUM))))))
+        (local.set $status (call $emit_or_fail (local.get $ws)
+          (select (global.get $OP_EXCLUSIVE_MINIMUM) (global.get $OP_MINIMUM) (i32.eq (local.get $excl_min_bool) (i32.const 2)))
+          (local.get $v) (i32.const 0) (i32.const 0)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_MAXIMUM)) (i32.const 0))
+      (then
+        (local.set $v (call $number_operand (local.get $ws) (local.get $frame) (global.get $KW_MAXIMUM)))
+        (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_MAXIMUM) (call $sl (local.get $frame) (global.get $KW_MAXIMUM))))))
+        (local.set $status (call $emit_or_fail (local.get $ws)
+          (select (global.get $OP_EXCLUSIVE_MAXIMUM) (global.get $OP_MAXIMUM) (i32.eq (local.get $excl_max_bool) (i32.const 2)))
+          (local.get $v) (i32.const 0) (i32.const 0)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (if (i32.and (i32.ge_s (call $sl (local.get $frame) (global.get $KW_EXCLUSIVE_MINIMUM)) (i32.const 0)) (i32.eqz (local.get $excl_min_bool)))
+      (then
+        (local.set $v (call $number_operand (local.get $ws) (local.get $frame) (global.get $KW_EXCLUSIVE_MINIMUM)))
+        (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_EXCLUSIVE_MINIMUM) (call $sl (local.get $frame) (global.get $KW_EXCLUSIVE_MINIMUM))))))
+        (local.set $status (call $emit_or_fail (local.get $ws) (global.get $OP_EXCLUSIVE_MINIMUM) (local.get $v) (i32.const 0) (i32.const 0)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (if (i32.and (i32.ge_s (call $sl (local.get $frame) (global.get $KW_EXCLUSIVE_MAXIMUM)) (i32.const 0)) (i32.eqz (local.get $excl_max_bool)))
+      (then
+        (local.set $v (call $number_operand (local.get $ws) (local.get $frame) (global.get $KW_EXCLUSIVE_MAXIMUM)))
+        (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_EXCLUSIVE_MAXIMUM) (call $sl (local.get $frame) (global.get $KW_EXCLUSIVE_MAXIMUM))))))
+        (local.set $status (call $emit_or_fail (local.get $ws) (global.get $OP_EXCLUSIVE_MAXIMUM) (local.get $v) (i32.const 0) (i32.const 0)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_MULTIPLE_OF)) (i32.const 0))
+      (then
+        (local.set $v (call $number_operand (local.get $ws) (local.get $frame) (global.get $KW_MULTIPLE_OF)))
+        (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (global.get $KW_MULTIPLE_OF) (call $sl (local.get $frame) (global.get $KW_MULTIPLE_OF))))))
+        (if (f64.le (call $mp_f64 (i32.add (call $schema_addr (local.get $ws)) (call $sl (local.get $frame) (global.get $KW_MULTIPLE_OF)))) (f64.const 0.0))
+          (then (return (call $shape_error (local.get $ws) (global.get $KW_MULTIPLE_OF) (call $sl (local.get $frame) (global.get $KW_MULTIPLE_OF))))))
+        (return (call $emit_or_fail (local.get $ws) (global.get $OP_MULTIPLE_OF) (local.get $v) (i32.const 0) (i32.const 0)))))
+    (global.get $STATUS_OK))
+
+  (func $generate_limit (param $ws i32) (param $frame i32) (param $code i32) (param $op i32) (result i32)
+    (local $v i32) (local $limit i32)
+    (local.set $v (call $sl (local.get $frame) (local.get $code)))
+    (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (global.get $STATUS_OK))))
+    (local.set $limit (call $limit_value (local.get $ws) (local.get $v)))
+    (if (i32.lt_s (local.get $limit) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (local.get $code) (local.get $v)))))
+    (call $emit_or_fail (local.get $ws) (local.get $op) (local.get $limit) (i32.const 0) (i32.const 0)))
+
+  (func $generate_format (param $ws i32) (param $frame i32) (result i32)
+    (local $v i32) (local $kind i32) (local $h i32) (local $n i32) (local $id i32)
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_FORMAT)))
+    (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (global.get $STATUS_OK))))
+    (if (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (global.get $OPT_FORMAT_ANNOTATE)) (then (return (global.get $STATUS_OK))))
+    (call $sv (local.get $ws) (local.get $v)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_STR)) (then (return (call $shape_error (local.get $ws) (global.get $KW_FORMAT) (local.get $v)))))
+    (local.set $id (call $format_code (local.get $ws) (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $v)) (local.get $h)) (local.get $n)))
+    (if (i32.eqz (local.get $id))
+      (then
+        ;; unknown formats are annotations unless strict
+        (if (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (global.get $OPT_STRICT))
+          (then (return (call $diag (local.get $ws) (global.get $DIAG_UNKNOWN_FORMAT) (global.get $KW_FORMAT) (local.get $v) (global.get $STATUS_SYNTAX_ERROR)))))
+        (return (global.get $STATUS_OK))))
+    (call $emit_or_fail (local.get $ws) (global.get $OP_FORMAT) (local.get $id) (i32.const 0) (i32.const 0)))
+
+  (func $generate_limits (param $ws i32) (param $frame i32) (result i32)
+    (local $s i32)
+    (local.set $s (call $generate_limit (local.get $ws) (local.get $frame) (global.get $KW_MIN_LENGTH) (global.get $OP_MIN_LENGTH)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $generate_limit (local.get $ws) (local.get $frame) (global.get $KW_MAX_LENGTH) (global.get $OP_MAX_LENGTH)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_PATTERN)) (i32.const 0))
+      (then
+        (local.set $s (call $compile_regex (local.get $ws) (local.get $frame) (global.get $KW_PATTERN) (call $sl (local.get $frame) (global.get $KW_PATTERN))))
+        (if (i32.lt_s (local.get $s) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $s)))))
+        (local.set $s (call $emit_or_fail (local.get $ws) (global.get $OP_PATTERN) (local.get $s) (i32.const 0) (i32.const 0)))
+        (if (local.get $s) (then (return (local.get $s))))))
+    (local.set $s (call $generate_format (local.get $ws) (local.get $frame)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $generate_limit (local.get $ws) (local.get $frame) (global.get $KW_MIN_ITEMS) (global.get $OP_MIN_ITEMS)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $generate_limit (local.get $ws) (local.get $frame) (global.get $KW_MAX_ITEMS) (global.get $OP_MAX_ITEMS)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $generate_limit (local.get $ws) (local.get $frame) (global.get $KW_MIN_PROPERTIES) (global.get $OP_MIN_PROPERTIES)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (call $generate_limit (local.get $ws) (local.get $frame) (global.get $KW_MAX_PROPERTIES) (global.get $OP_MAX_PROPERTIES)))
+
+  (func $generate_type (param $ws i32) (param $frame i32) (result i32)
+    (local $v i32) (local $kind i32) (local $h i32) (local $n i32) (local $mask i32) (local $m i32) (local $cur i32) (local $i i32)
+    (local $ek i32) (local $eh i32) (local $en i32) (local $addr i32)
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_TYPE)))
+    (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (global.get $STATUS_OK))))
+    (call $sv (local.get $ws) (local.get $v)) (local.set $n) (local.set $h) (local.set $kind)
+    (local.set $addr (i32.add (call $schema_addr (local.get $ws)) (local.get $v)))
+    (if (i32.eq (local.get $kind) (global.get $K_STR))
+      (then
+        (local.set $mask (call $type_name_mask (i32.add (local.get $addr) (local.get $h)) (local.get $n)))
+        ;; a name outside the metaschema's enum is a malformed schema
+        (if (i32.eqz (local.get $mask))
+          (then (return (call $shape_error (local.get $ws) (global.get $KW_TYPE) (local.get $v)))))
+        (if (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (global.get $OPT_DIALECT_04))
+          (then (local.set $mask (i32.or (local.get $mask) (i32.const 128)))))
+        (return (call $emit_or_fail (local.get $ws) (global.get $OP_TYPE) (local.get $mask) (i32.const 0) (i32.const 0)))))
+    (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (call $shape_error (local.get $ws) (global.get $KW_TYPE) (local.get $v)))))
+    (local.set $cur (i32.add (local.get $v) (local.get $h)))
+    (block $done (loop $loop
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (call $sv (local.get $ws) (local.get $cur)) (local.set $en) (local.set $eh) (local.set $ek)
+      (if (i32.ne (local.get $ek) (global.get $K_STR)) (then (return (call $shape_error (local.get $ws) (global.get $KW_TYPE) (local.get $cur)))))
+      (local.set $m (call $type_name_mask (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $cur)) (local.get $eh)) (local.get $en)))
+      (if (i32.eqz (local.get $m))
+        (then (return (call $shape_error (local.get $ws) (global.get $KW_TYPE) (local.get $cur)))))
+      (local.set $mask (i32.or (local.get $mask) (local.get $m)))
+      (local.set $cur (i32.add (i32.add (local.get $cur) (local.get $eh)) (local.get $en)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)))
+    (if (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (global.get $OPT_DIALECT_04))
+      (then (local.set $mask (i32.or (local.get $mask) (i32.const 128)))))
+    (call $emit_or_fail (local.get $ws) (global.get $OP_TYPE) (local.get $mask) (i32.const 0) (i32.const 0)))
+
+  (func $generate_enum (param $ws i32) (param $frame i32) (result i32)
+    (local $v i32) (local $kind i32) (local $h i32) (local $n i32) (local $list i32) (local $cur i32) (local $i i32) (local $rec i32)
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_ENUM)))
+    (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (global.get $STATUS_OK))))
+    (call $sv (local.get $ws) (local.get $v)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (call $shape_error (local.get $ws) (global.get $KW_ENUM) (local.get $v)))))
+    (if (i32.gt_u (local.get $n) (global.get $MAX_ENUM_MEMBERS))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (global.get $KW_ENUM) (local.get $v) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (local.set $list (call $pool_list (local.get $ws) (local.get $n)))
+    (if (i32.lt_s (local.get $list) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (local.set $cur (i32.add (local.get $v) (local.get $h)))
+    (block $done (loop $loop
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (local.set $rec (call $pool_value (local.get $ws) (local.get $cur)))
+      (if (i32.lt_s (local.get $rec) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+      (call $pool_list_set (local.get $ws) (local.get $list) (local.get $i) (local.get $rec))
+      (local.set $cur (call $sv_skip (local.get $ws) (local.get $cur)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)))
+    (call $emit_or_fail (local.get $ws) (global.get $OP_ENUM) (local.get $list) (i32.const 0) (i32.const 0)))
+
+  ;; $ref / $dynamicRef / $recursiveRef: queued for resolution after the
+  ;; walk; the instruction carries the queue index until fixup.
+  (func $emit_deferred_ref (param $ws i32) (param $frame i32) (param $code i32) (param $dynamic i32) (result i32)
+    (local $v i32) (local $kind i32) (local $h i32) (local $n i32) (local $addr i32) (local $index i32) (local $name i32) (local $p i32) (local $status i32)
+    (local.set $v (call $sl (local.get $frame) (local.get $code)))
+    (call $sv (local.get $ws) (local.get $v)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_STR)) (then (return (call $shape_error (local.get $ws) (local.get $code) (local.get $v)))))
+    (if (i32.gt_u (local.get $n) (global.get $MAX_URI_BYTES))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (local.get $code) (local.get $v) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (local.set $index (call $add_deferred_ref (local.get $ws) (local.get $v) (call $cf (local.get $frame) (global.get $CF_RESOURCE))
+                                              (call $cw (local.get $ws) (global.get $CWH_CODE_CURSOR)) (local.get $dynamic)))
+    (if (i32.lt_s (local.get $index) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $index)))))
+    (if (i32.eqz (local.get $dynamic))
+      (then (return (call $emit_or_fail (local.get $ws) (global.get $OP_REF) (i32.or (local.get $index) (i32.const 0x80000000)) (i32.const 0) (i32.const 0)))))
+    ;; the plain-name fragment, if any, names the dynamic anchor
+    (local.set $addr (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $v)) (local.get $h)))
+    (local.set $name (global.get $NONE))
+    (local.set $p (i32.const 0))
+    (block $fd (loop $fl
+      (call $work_add (i32.const 1))
+      (br_if $fd (i32.ge_u (local.get $p) (local.get $n)))
+      (if (i32.eq (i32.load8_u (i32.add (local.get $addr) (local.get $p))) (i32.const 35))
+        (then
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (if (i32.or (i32.eq (local.get $p) (local.get $n)) (i32.ne (i32.load8_u (i32.add (local.get $addr) (local.get $p))) (i32.const 47)))
+            (then
+              (local.set $name (call $pool_string (local.get $ws) (i32.add (local.get $addr) (local.get $p)) (i32.sub (local.get $n) (local.get $p))))
+              (if (i32.lt_s (local.get $name) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))))
+          (br $fd)))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $fl)))
+    (call $emit_or_fail (local.get $ws) (global.get $OP_DYNAMIC_REF) (i32.or (local.get $index) (i32.const 0x80000000)) (local.get $name) (i32.const 0)))
+
+  (func $generate_ref (param $ws i32) (param $frame i32) (result i32)
+    (local $status i32)
+    (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_REF)) (i32.const 0))
+      (then
+        (local.set $status (call $emit_deferred_ref (local.get $ws) (local.get $frame) (global.get $KW_REF) (i32.const 0)))
+        (if (local.get $status) (then (return (local.get $status))))
+        ;; draft-7 and earlier: $ref replaces its siblings
+        (if (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (i32.or (global.get $OPT_DIALECT_07) (global.get $OPT_DIALECT_04)))
+          (then
+            (call $cf_set (local.get $frame) (global.get $CF_KW_INDEX) (i32.sub (global.get $GS_END) (i32.const 1)))
+            (return (global.get $STATUS_OK))))))
+    (if (i32.ge_s (call $sl (local.get $frame) (i32.const 7)) (i32.const 0))
+      (then
+        (local.set $status (call $emit_deferred_ref (local.get $ws) (local.get $frame) (i32.const 7) (i32.const 1)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (if (i32.ge_s (call $sl (local.get $frame) (i32.const 9)) (i32.const 0))
+      (then
+        (local.set $status (call $emit_deferred_ref (local.get $ws) (local.get $frame) (i32.const 9) (i32.const 1)))
+        (if (local.get $status) (then (return (local.get $status))))))
+    (global.get $STATUS_OK))
+
+  (func $layout_resource_regions (param $ws i32) (param $off i32) (result i32)
+    (local $bytes i32)
+    (local.set $bytes (call $cw (local.get $ws) (global.get $CWH_SCHEMA_BYTES)))
+    (call $cw_set (local.get $ws) (global.get $CWH_STR_CAP) (call $str_cap_for (local.get $bytes)))
+    (call $cw_set (local.get $ws) (global.get $CWH_RES_CAP) (call $res_cap_for (local.get $bytes)))
+    (call $cw_set (local.get $ws) (global.get $CWH_ANCHOR_CAP) (call $anchor_cap_for (local.get $bytes)))
+    (call $cw_set (local.get $ws) (global.get $CWH_DREF_CAP) (call $dref_cap_for (local.get $bytes)))
+    (call $cw_set (local.get $ws) (global.get $CWH_STR_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (call $align8 (call $str_cap_for (local.get $bytes)))))
+    (call $cw_set (local.get $ws) (global.get $CWH_RES_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (i32.mul (call $res_cap_for (local.get $bytes)) (global.get $CW_RES_SIZE))))
+    (call $cw_set (local.get $ws) (global.get $CWH_ANCHOR_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (i32.mul (call $anchor_cap_for (local.get $bytes)) (global.get $CW_ANCHOR_SIZE))))
+    (call $cw_set (local.get $ws) (global.get $CWH_DREF_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (i32.mul (call $dref_cap_for (local.get $bytes)) (global.get $CW_DREF_SIZE))))
+    (i32.add (local.get $off) (global.get $CW_URI_SCRATCH)))
+
+  (func $layout_regex_regions (param $ws i32) (param $off i32) (result i32)
+    (local $bound i32)
+    (local.set $bound (call $regex_pattern_bound (call $cw (local.get $ws) (global.get $CWH_SCHEMA_BYTES))))
+    (call $cw_set (local.get $ws) (global.get $CWH_RSCAN_OFFSET) (local.get $off))
+    (call $cw_set (local.get $ws) (global.get $CWH_RSCAN_BYTES) (call $regex_scan_workspace_size (local.get $bound)))
+    (local.set $off (i32.add (local.get $off) (call $align8 (call $regex_scan_workspace_size (local.get $bound)))))
+    (call $cw_set (local.get $ws) (global.get $CWH_REMIT_OFFSET) (local.get $off))
+    (call $cw_set (local.get $ws) (global.get $CWH_REMIT_BYTES) (call $regex_emission_workspace_size (local.get $bound)))
+    (i32.add (local.get $off) (call $align8 (call $regex_emission_workspace_size (local.get $bound)))))
+
+  ;; Pool bytes for an 8-aligned record (regex programs).
+  (func $pool_alloc8 (param $ws i32) (param $bytes i32) (result i32)
+    (local $cursor i32) (local $pad i32) (local $off i32)
+    (if (call $emitting (local.get $ws))
+      (then (local.set $cursor (call $cw (local.get $ws) (global.get $CWH_POOL_CURSOR))))
+      (else (local.set $cursor (call $cw (local.get $ws) (global.get $CWH_POOL_BYTES)))))
+    (local.set $pad (i32.sub (call $align8 (local.get $cursor)) (local.get $cursor)))
+    (if (local.get $pad)
+      (then
+        (local.set $off (call $pool_alloc (local.get $ws) (local.get $pad)))
+        (if (i32.lt_s (local.get $off) (i32.const 0)) (then (return (i32.const -1))))))
+    (call $pool_alloc (local.get $ws) (call $align8 (local.get $bytes))))
+
+  (func $regex_fail (param $ws i32) (param $code i32) (param $voff i32) (param $regex_status i32) (result i32)
+    (call $cw_set (local.get $ws) (global.get $CWH_DIAGNOSTIC_DETAIL) (local.get $regex_status))
+    (if (i32.eq (local.get $regex_status) (global.get $REGEX_STATUS_UNSUPPORTED))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_REGEX) (local.get $code) (local.get $voff) (global.get $STATUS_UNSUPPORTED)))))
+    (if (i32.eq (local.get $regex_status) (global.get $REGEX_STATUS_LIMIT_EXCEEDED))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_REGEX) (local.get $code) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (if (i32.eq (local.get $regex_status) (global.get $REGEX_STATUS_INVALID_UTF8))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_REGEX) (local.get $code) (local.get $voff) (global.get $STATUS_INVALID_UTF8)))))
+    (call $diag (local.get $ws) (global.get $DIAG_REGEX) (local.get $code) (local.get $voff) (global.get $STATUS_SYNTAX_ERROR)))
+
+  ;; Compile the pattern string at schema offset $voff (a msgpack str)
+  ;; through the regex engine into a pool record
+  ;; [program bytes:4][source string:4][program (8-aligned)...].
+  ;; Returns the record offset, or -(status) on failure (diagnostic set).
+  (func $compile_regex (param $ws i32) (param $frame i32) (param $code i32) (param $voff i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $pattern i32) (local $scan i32) (local $scan_cap i32)
+    (local $status i32) (local $fuel i32) (local $initialize i32) (local $bytes i32) (local $record i32) (local $source i32)
+    (local $program i32) (local $emit i32) (local $emit_cap i32) (local $cont i32)
+    (local $regex_before i64)
+    (call $sv (local.get $ws) (local.get $voff)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_STR))
+      (then (return (i32.sub (i32.const 0) (call $shape_error (local.get $ws) (local.get $code) (local.get $voff))))))
+    (if (i32.gt_u (local.get $n) (global.get $REGEX_MAX_PATTERN_BYTES))
+      (then (return (i32.sub (i32.const 0) (call $regex_fail (local.get $ws) (local.get $code) (local.get $voff) (global.get $REGEX_STATUS_LIMIT_EXCEEDED))))))
+    (local.set $pattern (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (local.get $h)))
+    (local.set $scan (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_RSCAN_OFFSET))))
+    (local.set $scan_cap (call $cw (local.get $ws) (global.get $CWH_RSCAN_BYTES)))
+    ;; scan: run to completion, charging what the engine charged
+    (local.set $initialize (i32.const 1))
+    (block $scanned
+      (loop $scan_loop
+        (local.set $regex_before (if (result i64) (local.get $initialize) (then (i64.const 0)) (else (call $regex_scan_work_charged (local.get $scan)))))
+        (call $regex_scan_pattern (local.get $pattern) (local.get $n) (local.get $scan) (local.get $scan_cap) (local.get $initialize) (i32.const 0x7fffffff))
+        (local.set $fuel)
+        (local.set $status)
+        (call $work_regex (local.get $regex_before) (call $regex_scan_work_charged (local.get $scan)) (call $regex_scan_work_overflow (local.get $scan)))
+        (local.set $initialize (i32.const 0))
+        (br_if $scan_loop (i32.eq (local.get $status) (global.get $REGEX_STATUS_PAUSED)))
+        (br $scanned)))
+    (if (i32.ne (local.get $status) (global.get $REGEX_STATUS_OK))
+      (then (return (i32.sub (i32.const 0) (call $regex_fail (local.get $ws) (local.get $code) (local.get $voff) (local.get $status))))))
+    (local.set $bytes (call $regex_measured_program_size (local.get $scan) (local.get $scan_cap) (local.get $n)))
+    (if (i32.lt_s (local.get $bytes) (i32.const 0))
+      (then (return (i32.sub (i32.const 0) (call $regex_fail (local.get $ws) (local.get $code) (local.get $voff) (global.get $REGEX_STATUS_LIMIT_EXCEEDED))))))
+    (local.set $source (call $pool_string (local.get $ws) (local.get $pattern) (local.get $n)))
+    (if (i32.lt_s (local.get $source) (i32.const 0)) (then (return (i32.sub (i32.const 0) (global.get $STATUS_BUFFER_TOO_SMALL)))))
+    (local.set $record (call $pool_alloc8 (local.get $ws) (i32.add (global.get $REGEX_RECORD_HEADER) (local.get $bytes))))
+    (if (i32.lt_s (local.get $record) (i32.const 0)) (then (return (i32.sub (i32.const 0) (global.get $STATUS_BUFFER_TOO_SMALL)))))
+    (if (i32.eqz (call $emitting (local.get $ws))) (then (return (local.get $record))))
+    (call $pool_set (local.get $ws) (local.get $record) (i32.const 0) (local.get $bytes))
+    (call $pool_set (local.get $ws) (local.get $record) (i32.const 4) (local.get $source))
+    (local.set $program (i32.add (i32.add (call $prog (local.get $ws)) (local.get $record)) (global.get $REGEX_RECORD_HEADER)))
+    (local.set $regex_before (call $regex_scan_work_charged (local.get $scan)))
+    (local.set $status (call $regex_initialize_program_emission (local.get $scan) (local.get $scan_cap) (local.get $n) (local.get $program) (local.get $bytes) (i32.const 0)))
+    (call $work_regex (local.get $regex_before) (call $regex_scan_work_charged (local.get $scan)) (call $regex_scan_work_overflow (local.get $scan)))
+    (if (i32.ne (local.get $status) (global.get $REGEX_STATUS_OK))
+      (then (return (i32.sub (i32.const 0) (call $regex_fail (local.get $ws) (local.get $code) (local.get $voff) (local.get $status))))))
+    (local.set $emit (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_REMIT_OFFSET))))
+    (local.set $emit_cap (call $cw (local.get $ws) (global.get $CWH_REMIT_BYTES)))
+    (local.set $status (call $regex_initialize_emission_workspace (local.get $scan) (local.get $scan_cap) (local.get $n)
+                                                                    (local.get $program) (local.get $bytes) (local.get $emit) (local.get $emit_cap)))
+    (call $work_regex (i64.const 0) (call $regex_emission_work_charged (local.get $emit)) (call $regex_emission_work_overflow (local.get $emit)))
+    (if (i32.ne (local.get $status) (global.get $REGEX_STATUS_OK))
+      (then (return (i32.sub (i32.const 0) (call $regex_fail (local.get $ws) (local.get $code) (local.get $voff) (local.get $status))))))
+    (block $emitted
+      (loop $emit_loop
+        (local.set $regex_before (call $regex_emission_work_charged (local.get $emit)))
+        (call $regex_emit_pattern (local.get $emit) (local.get $emit_cap) (i32.const 0x7fffffff))
+        (local.set $fuel)
+        (local.set $status)
+        (call $work_regex (local.get $regex_before) (call $regex_emission_work_charged (local.get $emit)) (call $regex_emission_work_overflow (local.get $emit)))
+        (br_if $emit_loop (i32.eq (local.get $status) (global.get $REGEX_STATUS_PAUSED)))
+        (br $emitted)))
+    (if (i32.ne (local.get $status) (global.get $REGEX_STATUS_OK))
+      (then (return (i32.sub (i32.const 0) (call $regex_fail (local.get $ws) (local.get $code) (local.get $voff) (local.get $status))))))
+    (local.set $status (call $regex_validate_program (local.get $program) (local.get $bytes)))
+    (if (i32.ne (local.get $status) (global.get $REGEX_STATUS_OK))
+      (then (return (i32.sub (i32.const 0) (call $regex_fail (local.get $ws) (local.get $code) (local.get $voff) (local.get $status))))))
+    ;; track the largest match continuation the program will need
+    (local.set $cont (call $regex_continuation_size (i32.load offset=12 (local.get $program))
+                                                    (i32.load offset=20 (local.get $program))
+                                                    (i32.load offset=32 (local.get $program))))
+    (if (i32.lt_s (local.get $cont) (i32.const 0))
+      (then (return (i32.sub (i32.const 0) (call $regex_fail (local.get $ws) (local.get $code) (local.get $voff) (global.get $REGEX_STATUS_LIMIT_EXCEEDED))))))
+    ;; PROGRAM v2 stores the original regex continuation footprint.
+    (local.set $cont (i32.sub (local.get $cont) (global.get $REGEX_CONTINUATION_WORK_BYTES)))
+    (if (i32.gt_u (local.get $cont) (call $cw (local.get $ws) (global.get $CWH_MAX_REGEX_CONTINUATION)))
+      (then (call $cw_set (local.get $ws) (global.get $CWH_MAX_REGEX_CONTINUATION) (local.get $cont))))
+    (local.get $record))
+
+  ;; $id (or draft-4 id), $anchor, $dynamicAnchor, $recursiveAnchor.
+  (func $register_identifiers (param $ws i32) (param $frame i32) (result i32)
+    (local $v i32) (local $kind i32) (local $h i32) (local $n i32) (local $addr i32) (local $res i32) (local $base i32) (local $scratch i32)
+    (local $out i32) (local $out_len i32) (local $frag i32) (local $s i32) (local $id i32) (local $code i32)
+    (local.set $id (call $cf (local.get $frame) (global.get $CF_NODE_ID)))
+    ;; draft-7 and earlier: $ref replaces its siblings, identifiers included -
+    ;; a sibling $id must not change the base URI the $ref resolves against.
+    (if (i32.and (i32.ge_s (call $sl (local.get $frame) (global.get $KW_REF)) (i32.const 0))
+                 (i32.ne (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (i32.or (global.get $OPT_DIALECT_07) (global.get $OPT_DIALECT_04))) (i32.const 0)))
+      (then (return (global.get $STATUS_OK))))
+    (local.set $code (global.get $KW_ID))
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_ID)))
+    (if (i32.and (i32.lt_s (local.get $v) (i32.const 0)) (i32.ne (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (global.get $OPT_DIALECT_04)) (i32.const 0)))
+      (then (local.set $v (call $sl (local.get $frame) (i32.const 5))) (local.set $code (i32.const 5))))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (call $sv (local.get $ws) (local.get $v)) (local.set $n) (local.set $h) (local.set $kind)
+        (if (i32.ne (local.get $kind) (global.get $K_STR)) (then (return (call $shape_error (local.get $ws) (local.get $code) (local.get $v)))))
+        (local.set $addr (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $v)) (local.get $h)))
+        (if (i32.and (i32.ne (local.get $n) (i32.const 0)) (i32.eq (i32.load8_u (local.get $addr)) (i32.const 35)))
+          (then
+            ;; legacy location-independent identifier: an anchor
+            (if (i32.gt_u (local.get $n) (i32.const 1))
+              (then
+                (local.set $s (call $add_anchor (local.get $ws) (call $cf (local.get $frame) (global.get $CF_RESOURCE))
+                                                (i32.add (local.get $addr) (i32.const 1)) (i32.sub (local.get $n) (i32.const 1))
+                                                (call $cf (local.get $frame) (global.get $CF_VALUE)) (local.get $id) (i32.const 0)))
+                (if (local.get $s) (then (return (local.get $s)))))))
+          (else
+            (if (i32.gt_u (local.get $n) (global.get $MAX_URI_BYTES))
+              (then (return (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (local.get $code) (local.get $v) (global.get $STATUS_LIMIT_EXCEEDED)))))
+            (local.set $res (call $res_addr (local.get $ws) (call $cf (local.get $frame) (global.get $CF_RESOURCE))))
+            (local.set $base (call $arena_str_addr (local.get $ws) (i32.load (local.get $res))))
+            (local.set $scratch (call $uri_scratch (local.get $ws)))
+            (local.set $out (i32.add (local.get $scratch) (i32.const 64)))
+            (call $uri_resolve (local.get $base) (i32.load offset=4 (local.get $res)) (local.get $addr) (local.get $n)
+                               (local.get $out) (i32.sub (global.get $CW_URI_SCRATCH) (i32.const 64)) (local.get $scratch) (i32.add (local.get $scratch) (i32.const 32)))
+            (local.set $frag)
+            (local.set $out_len)
+            (if (i32.lt_s (local.get $out_len) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (local.get $code) (local.get $v)))))
+            (local.set $s (call $add_resource (local.get $ws) (local.get $out) (local.get $out_len) (call $cf (local.get $frame) (global.get $CF_VALUE)) (local.get $id)))
+            (if (i32.lt_s (local.get $s) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $s)))))
+            (call $cf_set (local.get $frame) (global.get $CF_RESOURCE) (local.get $s))))))
+    ;; $anchor (6), $dynamicAnchor (8), $recursiveAnchor (10)
+    (local.set $v (call $sl (local.get $frame) (i32.const 6)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (call $sv (local.get $ws) (local.get $v)) (local.set $n) (local.set $h) (local.set $kind)
+        (if (i32.ne (local.get $kind) (global.get $K_STR)) (then (return (call $shape_error (local.get $ws) (i32.const 6) (local.get $v)))))
+        (local.set $s (call $add_anchor (local.get $ws) (call $cf (local.get $frame) (global.get $CF_RESOURCE))
+                                        (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $v)) (local.get $h)) (local.get $n)
+                                        (call $cf (local.get $frame) (global.get $CF_VALUE)) (local.get $id) (i32.const 0)))
+        (if (local.get $s) (then (return (local.get $s))))))
+    (local.set $v (call $sl (local.get $frame) (i32.const 8)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (call $sv (local.get $ws) (local.get $v)) (local.set $n) (local.set $h) (local.set $kind)
+        (if (i32.ne (local.get $kind) (global.get $K_STR)) (then (return (call $shape_error (local.get $ws) (i32.const 8) (local.get $v)))))
+        (local.set $s (call $add_anchor (local.get $ws) (call $cf (local.get $frame) (global.get $CF_RESOURCE))
+                                        (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $v)) (local.get $h)) (local.get $n)
+                                        (call $cf (local.get $frame) (global.get $CF_VALUE)) (local.get $id) (i32.const 1)))
+        (if (local.get $s) (then (return (local.get $s))))))
+    (if (call $slot_is_true (local.get $ws) (local.get $frame) (i32.const 10))
+      (then
+        (local.set $s (call $add_anchor (local.get $ws) (call $cf (local.get $frame) (global.get $CF_RESOURCE))
+                                        (call $schema_addr (local.get $ws)) (i32.const 0)
+                                        (call $cf (local.get $frame) (global.get $CF_VALUE)) (local.get $id) (i32.const 1)))
+        (if (local.get $s) (then (return (local.get $s))))))
+    ;; a bundle document root adopts its declared resource's node id
+    (call $bind_resource_node (local.get $ws) (call $cf (local.get $frame) (global.get $CF_VALUE)) (local.get $id))
+    (global.get $STATUS_OK))
+
+  (func $bind_resource_node (param $ws i32) (param $voff i32) (param $id i32)
+    (local $i i32) (local $count i32) (local $r i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_RES_COUNT)))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $r (call $res_addr (local.get $ws) (local.get $i)))
+      (if (i32.eq (i32.load offset=8 (local.get $r)) (local.get $voff)) (then (i32.store offset=12 (local.get $r) (local.get $id))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l))))
+
+  (func $generate_header (param $ws i32) (param $frame i32) (result i32)
+    (local $ptr i32) (local $id i32) (local $entry i32) (local $s i32)
+    (local.set $id (call $cf (local.get $frame) (global.get $CF_NODE_ID)))
+    (local.set $s (call $register_identifiers (local.get $ws) (local.get $frame)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (if (call $cf (local.get $frame) (global.get $CF_ROUTE))
+      (then
+        (local.set $s (call $extract_gates (local.get $ws) (local.get $frame)))
+        (if (local.get $s) (then (return (local.get $s))))))
+    (local.set $ptr (call $pool_string (local.get $ws) (call $pointer_base (local.get $ws)) (call $cw (local.get $ws) (global.get $CWH_POINTER_BYTES))))
+    (if (i32.lt_s (local.get $ptr) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (call $cf_set (local.get $frame) (global.get $CF_CHILD_BASE) (call $cw (local.get $ws) (global.get $CWH_NODE_COUNT)))
+    (call $cf_set (local.get $frame) (global.get $CF_CHILD_NEXT) (i32.const 0))
+    (if (call $emitting (local.get $ws))
+      (then
+        (local.set $entry (i32.add (i32.add (call $prog (local.get $ws)) (global.get $PROGRAM_HEADER_SIZE)) (i32.mul (local.get $id) (global.get $NODE_SIZE))))
+        (i32.store (local.get $entry) (call $cw (local.get $ws) (global.get $CWH_CODE_CURSOR)))
+        (i32.store offset=4 (local.get $entry) (call $cf (local.get $frame) (global.get $CF_VALUE)))
+        (i32.store offset=8 (local.get $entry) (local.get $ptr))
+        (i32.store offset=12 (local.get $entry) (i32.shl (call $cf (local.get $frame) (global.get $CF_RESOURCE)) (i32.const 16)))
+        (call $map_insert (local.get $ws) (call $cf (local.get $frame) (global.get $CF_VALUE)) (local.get $id))))
+    (global.get $STATUS_OK))
+
+  (func $generate_step (param $ws i32) (param $frame i32) (result i32)
+    (local $step i32) (local $status i32) (local $v i32)
+    (local.set $step (call $cf (local.get $frame) (global.get $CF_KW_INDEX)))
+    (call $cf_set (local.get $frame) (global.get $CF_KW_INDEX) (i32.add (local.get $step) (i32.const 1)))
+    (call $ccharge (local.get $ws) (i32.const 1))
+    (if (i32.eq (local.get $step) (global.get $GS_HEADER)) (then (return (call $generate_header (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $step) (global.get $GS_REF))
+      (then (return (call $generate_ref (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $step) (global.get $GS_TYPE)) (then (return (call $generate_type (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $step) (global.get $GS_CONST))
+      (then
+        (local.set $v (call $sl (local.get $frame) (global.get $KW_CONST)))
+        (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (global.get $STATUS_OK))))
+        (local.set $v (call $pool_value (local.get $ws) (local.get $v)))
+        (if (i32.lt_s (local.get $v) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (return (call $emit_or_fail (local.get $ws) (global.get $OP_CONST) (local.get $v) (i32.const 0) (i32.const 0)))))
+    (if (i32.eq (local.get $step) (global.get $GS_ENUM)) (then (return (call $generate_enum (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $step) (global.get $GS_NUMERIC)) (then (return (call $generate_numeric (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $step) (global.get $GS_LIMITS)) (then (return (call $generate_limits (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $step) (global.get $GS_OBJECT)) (then (return (call $generate_object (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $step) (global.get $GS_ARRAY)) (then (return (call $generate_array (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $step) (global.get $GS_LOGIC)) (then (return (call $generate_logic (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $step) (global.get $GS_UNEVALUATED)) (then (return (call $generate_unevaluated (local.get $ws) (local.get $frame)))))
+    ;; GS_END
+    (local.set $status (call $emit_or_fail (local.get $ws) (global.get $OP_END) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (if (local.get $status) (then (return (local.get $status))))
+    (call $cw_set (local.get $ws) (global.get $CWH_NODE_COUNT)
+      (i32.add (call $cf (local.get $frame) (global.get $CF_CHILD_BASE)) (call $cf (local.get $frame) (global.get $CF_CHILD_NEXT))))
+    (call $cf_set (local.get $frame) (global.get $CF_PHASE) (global.get $CP_CHILDREN))
+    (call $cf_set (local.get $frame) (global.get $CF_KW_INDEX) (i32.const 0))
+    (call $cf_set (local.get $frame) (global.get $CF_CHILD_NEXT) (i32.const 0))
+    (call $cf_set (local.get $frame) (global.get $CF_ENTRY_INDEX) (i32.const 0))
+    (call $cf_set (local.get $frame) (global.get $CF_ENTRY_CURSOR) (i32.const 0))
+    (global.get $STATUS_OK))
+
+  ;; --- CHILDREN ---------------------------------------------------------------------
+
+  ;; Keyword whose value holds a source's schemas; -1 when the source is
+  ;; absent for this node.
+  (func $source_keyword (param $ws i32) (param $frame i32) (param $source i32) (result i32)
+    (local $k i32)
+    (if (i32.eq (local.get $source) (global.get $CS_PROPERTIES)) (then (return (global.get $KW_PROPERTIES))))
+    (if (i32.eq (local.get $source) (global.get $CS_PATTERN_PROPERTIES)) (then (return (global.get $KW_PATTERN_PROPERTIES))))
+    (if (i32.eq (local.get $source) (global.get $CS_ADDITIONAL_PROPERTIES)) (then (return (global.get $KW_ADDITIONAL_PROPERTIES))))
+    (if (i32.eq (local.get $source) (global.get $CS_PROPERTY_NAMES)) (then (return (global.get $KW_PROPERTY_NAMES))))
+    (if (i32.eq (local.get $source) (global.get $CS_DEPENDENT_SCHEMAS)) (then (return (global.get $KW_DEPENDENT_SCHEMAS))))
+    (if (i32.eq (local.get $source) (global.get $CS_DEPENDENCIES)) (then (return (global.get $KW_DEPENDENCIES))))
+    (if (i32.eq (local.get $source) (global.get $CS_PREFIX_ITEMS))
+      (then
+        (if (i32.ge_s (call $sl (local.get $frame) (global.get $KW_PREFIX_ITEMS)) (i32.const 0)) (then (return (global.get $KW_PREFIX_ITEMS))))
+        (if (i32.eq (call $slot_kind (local.get $ws) (local.get $frame) (global.get $KW_ITEMS)) (global.get $K_ARRAY)) (then (return (global.get $KW_ITEMS))))
+        (return (i32.const -1))))
+    (if (i32.eq (local.get $source) (global.get $CS_ITEMS))
+      (then
+        (local.set $k (call $slot_kind (local.get $ws) (local.get $frame) (global.get $KW_ITEMS)))
+        (if (i32.or (i32.eq (local.get $k) (i32.const -2)) (i32.eq (local.get $k) (global.get $K_ARRAY))) (then (return (i32.const -1))))
+        (return (global.get $KW_ITEMS))))
+    (if (i32.eq (local.get $source) (global.get $CS_ADDITIONAL_ITEMS))
+      (then
+        (if (i32.ne (call $slot_kind (local.get $ws) (local.get $frame) (global.get $KW_ITEMS)) (global.get $K_ARRAY)) (then (return (i32.const -1))))
+        (return (global.get $KW_ADDITIONAL_ITEMS))))
+    (if (i32.eq (local.get $source) (global.get $CS_CONTAINS)) (then (return (global.get $KW_CONTAINS))))
+    (if (i32.eq (local.get $source) (global.get $CS_ALL_OF)) (then (return (global.get $KW_ALL_OF))))
+    (if (i32.eq (local.get $source) (global.get $CS_ANY_OF)) (then (return (global.get $KW_ANY_OF))))
+    (if (i32.eq (local.get $source) (global.get $CS_ONE_OF)) (then (return (global.get $KW_ONE_OF))))
+    (if (i32.eq (local.get $source) (global.get $CS_NOT)) (then (return (global.get $KW_NOT))))
+    (if (i32.eq (local.get $source) (global.get $CS_IF)) (then (return (global.get $KW_IF))))
+    (if (i32.eq (local.get $source) (global.get $CS_THEN)) (then (return (global.get $KW_THEN))))
+    (if (i32.eq (local.get $source) (global.get $CS_ELSE)) (then (return (global.get $KW_ELSE))))
+    (if (i32.eq (local.get $source) (global.get $CS_UNEVALUATED_PROPERTIES)) (then (return (global.get $KW_UNEVALUATED_PROPERTIES))))
+    (if (i32.eq (local.get $source) (global.get $CS_UNEVALUATED_ITEMS)) (then (return (global.get $KW_UNEVALUATED_ITEMS))))
+    (if (i32.eq (local.get $source) (global.get $CS_DEFS)) (then (return (global.get $KW_DEFS))))
+    (if (i32.eq (local.get $source) (global.get $CS_DEFINITIONS)) (then (return (global.get $KW_DEFINITIONS))))
+    (i32.const -1))
+
+  ;; Sources iterating a map (key + schema) vs an array vs a single value.
+  (func $source_shape (param $source i32) (result i32)
+    (if (i32.or (i32.or (i32.eq (local.get $source) (global.get $CS_PROPERTIES)) (i32.eq (local.get $source) (global.get $CS_DEPENDENT_SCHEMAS)))
+                (i32.or (i32.or (i32.eq (local.get $source) (global.get $CS_DEPENDENCIES)) (i32.eq (local.get $source) (global.get $CS_DEFS)))
+                        (i32.or (i32.eq (local.get $source) (global.get $CS_DEFINITIONS)) (i32.eq (local.get $source) (global.get $CS_PATTERN_PROPERTIES)))))
+      (then (return (i32.const 2))))
+    (if (i32.or (i32.or (i32.eq (local.get $source) (global.get $CS_PREFIX_ITEMS)) (i32.eq (local.get $source) (global.get $CS_ALL_OF)))
+                (i32.or (i32.eq (local.get $source) (global.get $CS_ANY_OF)) (i32.eq (local.get $source) (global.get $CS_ONE_OF))))
+      (then (return (i32.const 1))))
+    (i32.const 0))
+
+  ;; Enter a child: assign its id per the source (generate-assigned for
+  ;; sources before $defs, fresh otherwise), push its frame with the
+  ;; pointer extended. Booleans and (for dependencies) arrays are skipped.
+  (func $enter_child (param $ws i32) (param $frame i32) (param $source i32) (param $code i32) (param $voff i32)
+                     (param $key i32) (param $klen i32) (param $index i32) (result i32)
+    (local $kind i32) (local $id i32) (local $plen i32) (local $status i32)
+    (local.set $kind (call $mp_kind (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (call $schema_end (local.get $ws))))
+    (if (i32.ne (local.get $kind) (global.get $K_MAP))
+      (then
+        (if (i32.or (i32.eq (local.get $kind) (global.get $K_TRUE)) (i32.eq (local.get $kind) (global.get $K_FALSE))) (then (return (global.get $STATUS_OK))))
+        (if (i32.and (i32.eq (local.get $source) (global.get $CS_DEPENDENCIES)) (i32.eq (local.get $kind) (global.get $K_ARRAY))) (then (return (global.get $STATUS_OK))))
+        (return (call $diag (local.get $ws) (global.get $DIAG_SCHEMA_NOT_OBJECT) (local.get $code) (local.get $voff) (global.get $STATUS_SYNTAX_ERROR)))))
+    (if (i32.lt_u (local.get $source) (global.get $CS_DEFS))
+      (then
+        (local.set $id (i32.add (call $cf (local.get $frame) (global.get $CF_CHILD_BASE)) (call $cf (local.get $frame) (global.get $CF_CHILD_NEXT))))
+        (call $cf_set (local.get $frame) (global.get $CF_CHILD_NEXT) (i32.add (call $cf (local.get $frame) (global.get $CF_CHILD_NEXT)) (i32.const 1))))
+      (else
+        (local.set $id (call $cw (local.get $ws) (global.get $CWH_NODE_COUNT)))
+        (if (i32.ge_u (local.get $id) (global.get $MAX_NODES))
+          (then (return (call $diag (local.get $ws) (global.get $DIAG_NODE_COUNT) (local.get $code) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED)))))
+        (call $cw_set (local.get $ws) (global.get $CWH_NODE_COUNT) (i32.add (local.get $id) (i32.const 1)))))
+    (local.set $plen (call $cw (local.get $ws) (global.get $CWH_POINTER_BYTES)))
+    (if (i32.eqz (call $pointer_push_keyword (local.get $ws) (local.get $code)))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_POINTER_LENGTH) (local.get $code) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (if (local.get $key)
+      (then
+        (if (i32.eqz (call $pointer_push_segment (local.get $ws) (local.get $key) (local.get $klen)))
+          (then (return (call $diag (local.get $ws) (global.get $DIAG_POINTER_LENGTH) (local.get $code) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED))))))
+      (else
+        (if (i32.ge_s (local.get $index) (i32.const 0))
+          (then
+            (if (i32.eqz (call $pointer_push_index (local.get $ws) (local.get $index)))
+              (then (return (call $diag (local.get $ws) (global.get $DIAG_POINTER_LENGTH) (local.get $code) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED)))))))))
+    (local.set $status (call $cpush (local.get $ws) (local.get $voff) (local.get $id) (local.get $plen)))
+    (if (local.get $status) (then (return (local.get $status))))
+    (call $cf_set (call $ctop (local.get $ws)) (global.get $CF_RESOURCE) (call $cf (local.get $frame) (global.get $CF_RESOURCE)))
+    (global.get $STATUS_OK))
+
+  (func $children_step (param $ws i32) (param $frame i32) (result i32)
+    (local $source i32) (local $code i32) (local $voff i32) (local $shape i32) (local $kind i32) (local $h i32) (local $n i32)
+    (local $index i32) (local $cursor i32) (local $key i32) (local $klen i32) (local $kk i32) (local $kh i32) (local $kn i32)
+    (local $child i32) (local $next i32)
+    (local.set $source (call $cf (local.get $frame) (global.get $CF_KW_INDEX)))
+    (if (i32.ge_u (local.get $source) (global.get $CS_COUNT))
+      (then (call $cpop (local.get $ws)) (return (global.get $STATUS_OK))))
+    (call $ccharge (local.get $ws) (i32.const 1))
+    (local.set $code (call $source_keyword (local.get $ws) (local.get $frame) (local.get $source)))
+    (local.set $voff (i32.const -1))
+    (if (i32.ge_s (local.get $code) (i32.const 0)) (then (local.set $voff (call $sl (local.get $frame) (local.get $code)))))
+    (if (i32.lt_s (local.get $voff) (i32.const 0))
+      (then
+        (call $cf_set (local.get $frame) (global.get $CF_KW_INDEX) (i32.add (local.get $source) (i32.const 1)))
+        (call $cf_set (local.get $frame) (global.get $CF_ENTRY_INDEX) (i32.const 0))
+        (call $cf_set (local.get $frame) (global.get $CF_ENTRY_CURSOR) (i32.const 0))
+        (return (global.get $STATUS_OK))))
+    (local.set $shape (call $source_shape (local.get $source)))
+    (if (i32.eqz (local.get $shape))
+      (then
+        (call $cf_set (local.get $frame) (global.get $CF_KW_INDEX) (i32.add (local.get $source) (i32.const 1)))
+        (return (call $enter_child (local.get $ws) (local.get $frame) (local.get $source) (local.get $code) (local.get $voff) (i32.const 0) (i32.const 0) (i32.const -1)))))
+    (call $sv (local.get $ws) (local.get $voff)) (local.set $n) (local.set $h) (local.set $kind)
+    (local.set $index (call $cf (local.get $frame) (global.get $CF_ENTRY_INDEX)))
+    (if (i32.eqz (local.get $index))
+      (then (local.set $cursor (i32.add (local.get $voff) (local.get $h))))
+      (else (local.set $cursor (call $cf (local.get $frame) (global.get $CF_ENTRY_CURSOR)))))
+    (if (i32.ge_u (local.get $index) (local.get $n))
+      (then
+        (call $cf_set (local.get $frame) (global.get $CF_KW_INDEX) (i32.add (local.get $source) (i32.const 1)))
+        (call $cf_set (local.get $frame) (global.get $CF_ENTRY_INDEX) (i32.const 0))
+        (call $cf_set (local.get $frame) (global.get $CF_ENTRY_CURSOR) (i32.const 0))
+        (return (global.get $STATUS_OK))))
+    (local.set $key (i32.const 0))
+    (local.set $child (local.get $cursor))
+    (if (i32.eq (local.get $shape) (i32.const 2))
+      (then
+        (call $sv (local.get $ws) (local.get $cursor)) (local.set $kn) (local.set $kh) (local.set $kk)
+        (local.set $key (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $cursor)) (local.get $kh)))
+        (local.set $klen (local.get $kn))
+        (local.set $child (i32.add (i32.add (local.get $cursor) (local.get $kh)) (local.get $kn)))))
+    (local.set $next (call $sv_skip (local.get $ws) (local.get $child)))
+    (if (i32.lt_s (local.get $next) (i32.const 0)) (then (return (call $shape_error (local.get $ws) (local.get $code) (local.get $child)))))
+    (call $cf_set (local.get $frame) (global.get $CF_ENTRY_CURSOR) (local.get $next))
+    (call $cf_set (local.get $frame) (global.get $CF_ENTRY_INDEX) (i32.add (local.get $index) (i32.const 1)))
+    (call $enter_child (local.get $ws) (local.get $frame) (local.get $source) (local.get $code) (local.get $child)
+                       (local.get $key) (local.get $klen) (select (i32.const -1) (local.get $index) (local.get $key))))
+
+  ;; --- driver -------------------------------------------------------------------------
+
+  (func $compile_step (param $ws i32) (result i32)
+    (local $frame i32) (local $phase i32)
+    (local.set $frame (call $ctop (local.get $ws)))
+    (local.set $phase (call $cf (local.get $frame) (global.get $CF_PHASE)))
+    (if (i32.eq (local.get $phase) (global.get $CP_COLLECT)) (then (return (call $collect_step (local.get $ws) (local.get $frame)))))
+    (if (i32.eq (local.get $phase) (global.get $CP_GENERATE)) (then (return (call $generate_step (local.get $ws) (local.get $frame)))))
+    (call $children_step (local.get $ws) (local.get $frame)))
+
+  ;; Emit the two synthesized boolean nodes.
+  (func $emit_boolean_nodes (param $ws i32) (result i32)
+    (local $entry i32) (local $s i32)
+    (if (call $emitting (local.get $ws))
+      (then
+        (local.set $entry (i32.add (call $prog (local.get $ws)) (global.get $PROGRAM_HEADER_SIZE)))
+        (i32.store (local.get $entry) (call $cw (local.get $ws) (global.get $CWH_CODE_CURSOR)))
+        (i32.store offset=4 (local.get $entry) (global.get $NONE))
+        (i32.store offset=8 (local.get $entry) (global.get $NONE))
+        (i32.store offset=12 (local.get $entry) (i32.const 0))
+        (i32.store offset=16 (local.get $entry) (i32.add (call $cw (local.get $ws) (global.get $CWH_CODE_CURSOR)) (global.get $INSTRUCTION_SIZE)))
+        (i32.store offset=20 (local.get $entry) (global.get $NONE))
+        (i32.store offset=24 (local.get $entry) (global.get $NONE))
+        (i32.store offset=28 (local.get $entry) (i32.const 0))))
+    (local.set $s (call $emit_or_fail (local.get $ws) (global.get $OP_END) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $emit_or_fail (local.get $ws) (global.get $OP_FAIL) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (call $emit_or_fail (local.get $ws) (global.get $OP_END) (i32.const 0) (i32.const 0) (i32.const 0)))
+
+  ;; Shared workspace initialization for both passes.
+  (func $init_walk (param $ws i32) (result i32)
+    (local $kind i32) (local $s i32)
+    (call $cw_set (local.get $ws) (global.get $CWH_FRAME_COUNT) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_NODE_COUNT) (i32.const 3))
+    (call $cw_set (local.get $ws) (global.get $CWH_POINTER_BYTES) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_MAX_DEPTH) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_TABLE_COUNTER) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_EXTRA_COUNT) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_MAX_REGEX_CONTINUATION) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_EXTRA_CURSOR) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_STR_CURSOR) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_RES_COUNT) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_ANCHOR_COUNT) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_DREF_COUNT) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_CURSOR) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_PENDING) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_SWEEP) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_PROGRESS) (i32.const 0))
+    (call $work_zero (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_VISITED_OFFSET))) (i32.const 0)
+                 (call $align8 (i32.add (i32.shr_u (call $cw (local.get $ws) (global.get $CWH_SCHEMA_BYTES)) (i32.const 3)) (i32.const 8))))
+    (call $init_keyword_table (local.get $ws))
+    (local.set $s (call $emit_boolean_nodes (local.get $ws)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $init_bundle (local.get $ws)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $init_set (local.get $ws)))
+    (if (local.get $s) (then (return (local.get $s))))
+    ;; set programs push their routes from the walk loop
+    (if (call $cw (local.get $ws) (global.get $CWH_ROUTE_COUNT)) (then (return (global.get $STATUS_OK))))
+    (local.set $kind (call $mp_kind (i32.add (call $schema_addr (local.get $ws)) (call $cw (local.get $ws) (global.get $CWH_ROOT_VOFF))) (call $schema_end (local.get $ws))))
+    (if (i32.eq (local.get $kind) (global.get $K_TRUE))
+      (then
+        (call $cw_set (local.get $ws) (global.get $CWH_ROOT_NODE) (global.get $TRUE_NODE))
+        (call $cw_set (local.get $ws) (global.get $CWH_NODE_COUNT) (i32.const 2))
+        (return (global.get $STATUS_OK))))
+    (if (i32.eq (local.get $kind) (global.get $K_FALSE))
+      (then
+        (call $cw_set (local.get $ws) (global.get $CWH_ROOT_NODE) (global.get $FALSE_NODE))
+        (call $cw_set (local.get $ws) (global.get $CWH_NODE_COUNT) (i32.const 2))
+        (return (global.get $STATUS_OK))))
+    (if (i32.ne (local.get $kind) (global.get $K_MAP))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_SCHEMA_NOT_OBJECT) (i32.const 0) (i32.const 0) (global.get $STATUS_SYNTAX_ERROR)))))
+    (call $cw_set (local.get $ws) (global.get $CWH_ROOT_NODE) (i32.const 2))
+    (i32.store offset=12 (call $res_addr (local.get $ws) (i32.const 0)) (i32.const 2))
+    ;; pointer text starts as "#"
+    (drop (call $pointer_push_byte (local.get $ws) (i32.const 0x23)))
+    (local.set $s (call $cpush (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_ROOT_VOFF)) (i32.const 2) (i32.const 1)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (call $cf_set (call $ctop (local.get $ws)) (global.get $CF_RESOURCE) (i32.const 0))
+    (global.get $STATUS_OK))
+
+  ;; A bundle is an array [root, baseUri|nil, [uri, schema]...]. Registers
+  ;; resource 0 (the root's base) and one resource per extra document,
+  ;; queuing those documents as extra roots.
+  (func $init_bundle (param $ws i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $cur i32) (local $i i32) (local $r i32) (local $uk i32) (local $uh i32) (local $un i32)
+    (local $schema i32) (local $end i32) (local $ek i32) (local $eh i32) (local $en i32) (local $uri i32) (local $uri_len i32) (local $doc i32)
+    (local.set $schema (call $schema_addr (local.get $ws)))
+    (local.set $end (call $schema_end (local.get $ws)))
+    (call $mp_header (local.get $schema) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+    (call $cw_set (local.get $ws) (global.get $CWH_BUNDLE) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_ROOT_VOFF) (i32.const 0))
+    (if (i32.ne (local.get $kind) (global.get $K_ARRAY))
+      (then
+        ;; single schema: the root resource has the empty base URI
+        (local.set $r (call $add_resource (local.get $ws) (local.get $schema) (i32.const 0) (i32.const 0) (i32.const 2)))
+        (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $r)))))
+        (return (global.get $STATUS_OK))))
+    (if (i32.lt_u (local.get $n) (i32.const 2))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_SCHEMA_NOT_OBJECT) (i32.const 0) (i32.const 0) (global.get $STATUS_SYNTAX_ERROR)))))
+    (call $cw_set (local.get $ws) (global.get $CWH_BUNDLE) (i32.const 1))
+    (call $cw_set (local.get $ws) (global.get $CWH_ROOT_VOFF) (local.get $h))
+    ;; element 1: base URI or nil
+    (local.set $cur (call $mp_skip (i32.add (local.get $schema) (local.get $h)) (local.get $end)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+    (call $mp_header (local.get $cur) (local.get $end)) (local.set $un) (local.set $uh) (local.set $uk)
+    (local.set $uri (i32.add (local.get $cur) (local.get $uh)))
+    (local.set $uri_len (select (local.get $un) (i32.const 0) (i32.eq (local.get $uk) (global.get $K_STR))))
+    (local.set $r (call $add_resource (local.get $ws) (local.get $uri) (local.get $uri_len) (local.get $h) (i32.const 2)))
+    (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $r)))))
+    (local.set $cur (call $mp_skip (local.get $cur) (local.get $end)))
+    (local.set $i (i32.const 2))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (call $mp_header (local.get $cur) (local.get $end)) (local.set $en) (local.set $eh) (local.set $ek)
+      (if (i32.or (i32.ne (local.get $ek) (global.get $K_ARRAY)) (i32.ne (local.get $en) (i32.const 2)))
+        (then (return (call $diag (local.get $ws) (global.get $DIAG_SCHEMA_NOT_OBJECT) (i32.const 0) (i32.sub (local.get $cur) (local.get $schema)) (global.get $STATUS_SYNTAX_ERROR)))))
+      (local.set $cur (i32.add (local.get $cur) (local.get $eh)))
+      (call $mp_header (local.get $cur) (local.get $end)) (local.set $un) (local.set $uh) (local.set $uk)
+      (if (i32.ne (local.get $uk) (global.get $K_STR))
+        (then (return (call $diag (local.get $ws) (global.get $DIAG_KEYWORD_SHAPE) (i32.const 0) (i32.sub (local.get $cur) (local.get $schema)) (global.get $STATUS_SYNTAX_ERROR)))))
+      (local.set $uri (i32.add (local.get $cur) (local.get $uh)))
+      (local.set $doc (i32.add (local.get $uri) (local.get $un)))
+      (local.set $r (call $add_resource (local.get $ws) (local.get $uri) (local.get $un) (i32.sub (local.get $doc) (local.get $schema)) (global.get $NONE)))
+      (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $r)))))
+      (local.set $r (call $queue_extra (local.get $ws) (i32.sub (local.get $doc) (local.get $schema)) (i32.sub (local.get $cur) (local.get $schema))))
+      (if (local.get $r) (then (return (local.get $r))))
+      (local.set $cur (call $mp_skip (local.get $doc) (local.get $end)))
+      (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (global.get $STATUS_CORRUPT_DOCUMENT))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (global.get $STATUS_OK))
+
+  (func $walk (param $ws i32) (param $fuel i32) (result i32 i32)
+    (local $status i32)
+    (loop $loop
+      (local.set $fuel (call $work_take (local.get $fuel)))
+      (if (i32.le_s (local.get $fuel) (i32.const 0))
+        (then (return (global.get $STATUS_PAUSED) (local.get $fuel))))
+      (if (i32.eqz (call $cw (local.get $ws) (global.get $CWH_FRAME_COUNT)))
+        (then
+          (local.set $status (call $push_next_route (local.get $ws)))
+          (if (i32.lt_s (local.get $status) (i32.const 0))
+            (then (return (i32.sub (i32.const 0) (local.get $status)) (local.get $fuel))))
+          (if (i32.eqz (local.get $status))
+            (then (local.set $status (call $push_next_extra (local.get $ws)))))
+          (if (i32.lt_s (local.get $status) (i32.const 0))
+            (then (return (global.get $STATUS_LIMIT_EXCEEDED) (local.get $fuel))))
+          (if (i32.eqz (local.get $status))
+            (then
+              (local.set $status (call $drain_step (local.get $ws)))
+              (if (i32.lt_s (local.get $status) (i32.const 0))
+                (then (return (i32.sub (i32.const 0) (local.get $status)) (local.get $fuel))))
+              (if (i32.eqz (local.get $status))
+                (then (return (global.get $STATUS_OK) (call $work_take (local.get $fuel)))))
+              (br $loop)))
+          ;; Root setup can overrun; do not start its first instruction yet.
+          (br $loop)))
+      (local.set $status (call $compile_step (local.get $ws)))
+      (local.set $fuel (call $work_take (local.get $fuel)))
+      (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+      (br $loop))
+    (unreachable))
+
+  ;; Resolve queued references; unwalked targets become extra roots.
+  ;; Returns 2 when an extra root was queued (the walk pushes it), 0 when
+  ;; every reference is resolved, or a negated status.
+  (func $drain_step (param $ws i32) (result i32)
+    (local $cursor i32) (local $count i32) (local $d i32) (local $r i32) (local $target i32) (local $kind i32) (local $i i32)
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (local.set $cursor (call $cw (local.get $ws) (global.get $CWH_DRAIN_CURSOR)))
+      (local.set $count (call $cw (local.get $ws) (global.get $CWH_DREF_COUNT)))
+      (if (i32.lt_u (local.get $cursor) (local.get $count))
+        (then
+          (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_CURSOR) (i32.add (local.get $cursor) (i32.const 1)))
+          (local.set $d (call $dref_addr (local.get $ws) (local.get $cursor)))
+          (if (i32.ne (i32.load offset=12 (local.get $d)) (i32.const -1)) (then (return (i32.const 2))))
+          (local.set $r (call $resolve_deferred (local.get $ws) (local.get $cursor)))
+          (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (local.get $r))))
+          (if (i32.eqz (local.get $r))
+            (then
+              (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_PENDING) (i32.add (call $cw (local.get $ws) (global.get $CWH_DRAIN_PENDING)) (i32.const 1)))
+              (return (i32.const 2))))
+          (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_PROGRESS) (i32.const 1))
+          (local.set $target (i32.load offset=12 (local.get $d)))
+          (if (call $is_visited (local.get $ws) (local.get $target)) (then (return (i32.const 2))))
+          (local.set $kind (call $mp_kind (i32.add (call $schema_addr (local.get $ws)) (local.get $target)) (call $schema_end (local.get $ws))))
+          (if (i32.ne (local.get $kind) (global.get $K_MAP)) (then (return (i32.const 2))))
+          (local.set $r (call $queue_extra (local.get $ws) (local.get $target) (i32.load (local.get $d))))
+          (if (local.get $r) (then (return (i32.sub (i32.const 0) (local.get $r)))))
+          (return (i32.const 2))))
+      ;; every entry seen once this sweep
+      (br_if $done (i32.eqz (call $cw (local.get $ws) (global.get $CWH_DRAIN_PENDING))))
+      (if (i32.eqz (call $cw (local.get $ws) (global.get $CWH_DRAIN_PROGRESS)))
+        (then
+          ;; no progress: report the first unresolved reference
+          (local.set $i (i32.const 0))
+          (block $fd (loop $fl
+            (br_if $fd (i32.ge_u (local.get $i) (local.get $count)))
+            (call $work_add (i32.const 1))
+            (local.set $d (call $dref_addr (local.get $ws) (local.get $i)))
+            (if (i32.eq (i32.load offset=12 (local.get $d)) (i32.const -1))
+              (then (return (i32.sub (i32.const 0) (call $diag (local.get $ws) (global.get $DIAG_REF_UNRESOLVABLE) (global.get $KW_REF) (i32.load (local.get $d)) (global.get $STATUS_SYNTAX_ERROR))))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $fl)))
+          (return (i32.sub (i32.const 0) (global.get $STATUS_SYNTAX_ERROR)))))
+      (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_PENDING) (i32.const 0))
+      (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_PROGRESS) (i32.const 0))
+      (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_CURSOR) (i32.const 0))
+      (call $cw_set (local.get $ws) (global.get $CWH_DRAIN_SWEEP) (i32.add (call $cw (local.get $ws) (global.get $CWH_DRAIN_SWEEP)) (i32.const 1)))
+      (return (i32.const 2))))
+    (i32.const 0))
+
+  ;; Program resource table: per resource [uri string][dynamic anchor list]
+  ;; where the list is [count][(name string, node)...]. Both passes run it
+  ;; after the walk; EMIT records the table in the header.
+  (func $finalize_resources (param $ws i32) (result i32)
+    (local $count i32) (local $i i32) (local $r i32) (local $uri i32) (local $acount i32) (local $j i32) (local $a i32) (local $list i32) (local $k i32)
+    (local $table i32) (local $name i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_RES_COUNT)))
+    (local.set $i (call $cw (local.get $ws) (global.get $CWH_FINAL_CURSOR)))
+    (if (i32.eqz (local.get $i))
+      (then
+        (local.set $table (call $pool_alloc (local.get $ws) (i32.shl (local.get $count) (i32.const 3))))
+        (if (i32.lt_s (local.get $table) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (call $cw_set (local.get $ws) (global.get $CWH_FINAL_TABLE) (local.get $table)))
+      (else (local.set $table (call $cw (local.get $ws) (global.get $CWH_FINAL_TABLE)))))
+    (block $done (loop $l
+        (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $r (call $res_addr (local.get $ws) (local.get $i)))
+      (local.set $uri (call $pool_string (local.get $ws) (call $arena_str_addr (local.get $ws) (i32.load (local.get $r))) (i32.load offset=4 (local.get $r))))
+      (if (i32.lt_s (local.get $uri) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+      ;; dynamic anchors of this resource
+      (local.set $acount (i32.const 0))
+      (local.set $j (i32.const 0))
+      (block $cd (loop $cl
+        (call $work_add (i32.const 1))
+        (br_if $cd (i32.ge_u (local.get $j) (call $cw (local.get $ws) (global.get $CWH_ANCHOR_COUNT))))
+        (local.set $a (call $anchor_addr (local.get $ws) (local.get $j)))
+        (if (i32.and (i32.eq (i32.load (local.get $a)) (local.get $i)) (i32.and (i32.load offset=16 (local.get $a)) (i32.const 1)))
+          (then (local.set $acount (i32.add (local.get $acount) (i32.const 1)))))
+        (local.set $j (i32.add (local.get $j) (i32.const 1)))
+        (br $cl)))
+      (local.set $list (call $pool_alloc (local.get $ws) (i32.add (i32.const 4) (i32.shl (local.get $acount) (i32.const 3)))))
+      (if (i32.lt_s (local.get $list) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+      (call $pool_set (local.get $ws) (local.get $list) (i32.const 0) (local.get $acount))
+      (local.set $k (i32.const 0))
+      (local.set $j (i32.const 0))
+      (block $wd (loop $wl
+        (call $work_add (i32.const 1))
+        (br_if $wd (i32.ge_u (local.get $j) (call $cw (local.get $ws) (global.get $CWH_ANCHOR_COUNT))))
+        (local.set $a (call $anchor_addr (local.get $ws) (local.get $j)))
+        (if (i32.and (i32.eq (i32.load (local.get $a)) (local.get $i)) (i32.and (i32.load offset=16 (local.get $a)) (i32.const 1)))
+          (then
+            (local.set $name (call $pool_string (local.get $ws) (call $arena_str_addr (local.get $ws) (i32.load offset=4 (local.get $a))) (i32.load offset=8 (local.get $a))))
+            (if (i32.lt_s (local.get $name) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+            (call $pool_set (local.get $ws) (local.get $list) (i32.add (i32.const 4) (i32.shl (local.get $k) (i32.const 3))) (local.get $name))
+            (call $pool_set (local.get $ws) (local.get $list) (i32.add (i32.const 8) (i32.shl (local.get $k) (i32.const 3))) (i32.shr_u (i32.load offset=16 (local.get $a)) (i32.const 1)))
+            (local.set $k (i32.add (local.get $k) (i32.const 1)))))
+        (local.set $j (i32.add (local.get $j) (i32.const 1)))
+        (br $wl)))
+      (call $pool_set (local.get $ws) (local.get $table) (i32.shl (local.get $i) (i32.const 3)) (local.get $uri))
+      (call $pool_set (local.get $ws) (local.get $table) (i32.add (i32.shl (local.get $i) (i32.const 3)) (i32.const 4)) (local.get $list))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (call $cw_set (local.get $ws) (global.get $CWH_FINAL_CURSOR) (local.get $i))
+      (if (i32.lt_u (local.get $i) (local.get $count))
+        (then (return (global.get $STATUS_PAUSED))))
+      (br $l)))
+    (if (call $emitting (local.get $ws))
+      (then
+        (i32.store (i32.add (call $prog (local.get $ws)) (global.get $PH_RESOURCE_TABLE_OFFSET)) (local.get $table))
+        (i32.store (i32.add (call $prog (local.get $ws)) (global.get $PH_RESOURCE_COUNT)) (local.get $count))))
+    (global.get $STATUS_OK))
+
+  (func $measure_schema_impl
+    (param $schema i32) (param $schema_bytes i32) (param $ws i32) (param $ws_capacity i32)
+    (param $options i32) (param $initialize i32) (param $fuel i32) (result i32 i32)
+    (local $status i32) (local $off i32)
+    (if (local.get $initialize)
+      (then
+        (if (i32.gt_u (local.get $schema_bytes) (global.get $MAX_SCHEMA_BYTES))
+          (then (return (global.get $STATUS_LIMIT_EXCEEDED) (local.get $fuel))))
+        (if (i32.lt_u (local.get $ws_capacity) (call $compile_workspace_size (local.get $schema_bytes)))
+          (then (return (global.get $STATUS_BUFFER_TOO_SMALL) (local.get $fuel))))
+        (call $work_zero (local.get $ws) (i32.const 0) (global.get $CW_HEADER_SIZE))
+        (if (i32.ne (call $mp_skip (local.get $schema) (i32.add (local.get $schema) (local.get $schema_bytes)))
+                    (i32.add (local.get $schema) (local.get $schema_bytes)))
+          (then (return (global.get $STATUS_CORRUPT_DOCUMENT) (local.get $fuel))))
+        (call $cw_set (local.get $ws) (global.get $CWH_MAGIC) (global.get $CW_MAGIC))
+        (call $cw_set (local.get $ws) (global.get $CWH_VERSION) (global.get $CW_VERSION))
+        (call $cw_set (local.get $ws) (global.get $CWH_SCHEMA_ADDRESS) (local.get $schema))
+        (call $cw_set (local.get $ws) (global.get $CWH_SCHEMA_BYTES) (local.get $schema_bytes))
+        (call $cw_set (local.get $ws) (global.get $CWH_PASS) (global.get $PASS_MEASURE))
+        (call $cw_set (local.get $ws) (global.get $CWH_OPTIONS) (local.get $options))
+        (call $cw_set (local.get $ws) (global.get $CWH_FRAME_CAPACITY) (global.get $MAX_STATIC_DEPTH))
+        (local.set $off (global.get $CW_HEADER_SIZE))
+        (call $cw_set (local.get $ws) (global.get $CWH_KEYWORD_TABLE_OFFSET) (local.get $off))
+        (local.set $off (i32.add (local.get $off) (global.get $CW_KEYWORD_TABLE_BYTES)))
+        (call $cw_set (local.get $ws) (global.get $CWH_POINTER_OFFSET) (local.get $off))
+        (local.set $off (i32.add (local.get $off) (i32.shl (global.get $MAX_POINTER_BYTES) (i32.const 1))))
+        (call $cw_set (local.get $ws) (global.get $CWH_FRAMES_OFFSET) (local.get $off))
+        (local.set $off (i32.add (local.get $off) (i32.mul (global.get $MAX_STATIC_DEPTH) (global.get $CW_FRAME_SIZE))))
+        (call $cw_set (local.get $ws) (global.get $CWH_VISITED_OFFSET) (local.get $off))
+        (local.set $off (i32.add (local.get $off) (call $align8 (i32.add (i32.shr_u (local.get $schema_bytes) (i32.const 3)) (i32.const 8)))))
+        (call $cw_set (local.get $ws) (global.get $CWH_EXTRA_OFFSET) (local.get $off))
+        (local.set $off (i32.add (local.get $off) (i32.shl (global.get $CW_EXTRA_CAPACITY) (i32.const 3))))
+        (local.set $off (call $layout_regex_regions (local.get $ws) (local.get $off)))
+        (drop (call $layout_resource_regions (local.get $ws) (local.get $off)))
+        (local.set $status (call $init_walk (local.get $ws)))
+        (if (local.get $status) (then (return (local.get $status) (local.get $fuel)))))
+      (else
+        (local.set $status (call $cw_check (local.get $ws) (local.get $ws_capacity)))
+        (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+        (if (i32.ne (call $cw (local.get $ws) (global.get $CWH_PASS)) (global.get $PASS_MEASURE))
+          (then (return (global.get $STATUS_CORRUPT_PROGRAM) (local.get $fuel))))
+        ;; the caller may have moved the schema bytes
+        (call $cw_set (local.get $ws) (global.get $CWH_SCHEMA_ADDRESS) (local.get $schema))))
+    (if (i32.eqz (call $cw (local.get $ws) (global.get $CWH_FINAL_PHASE)))
+      (then
+        (call $walk (local.get $ws) (local.get $fuel))
+        (local.set $fuel) (local.set $status)
+        (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+        (call $cw_set (local.get $ws) (global.get $CWH_FINAL_PHASE) (i32.const 1))))
+    (call $finish_resources (local.get $ws) (local.get $fuel))
+    (local.set $fuel) (local.set $status)
+    (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+    (local.set $status (call $finalize_gates (local.get $ws)))
+    (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+    (call $cw_set (local.get $ws) (global.get $CWH_PASS) (global.get $PASS_COMPLETE))
+    (call $cw_set (local.get $ws) (global.get $CWH_MEASURED_NODES) (call $cw (local.get $ws) (global.get $CWH_NODE_COUNT)))
+    (global.get $STATUS_OK) (local.get $fuel))
+
+  (func $measured_program_size (export "measured_program_size") (param $ws i32) (result i32)
+    (if (i32.ne (call $cw (local.get $ws) (global.get $CWH_PASS)) (global.get $PASS_COMPLETE)) (then (return (i32.const -1))))
+    (i32.add (i32.add (global.get $PROGRAM_HEADER_SIZE) (i32.mul (call $cw (local.get $ws) (global.get $CWH_MEASURED_NODES)) (global.get $NODE_SIZE)))
+             (i32.add (call $cw (local.get $ws) (global.get $CWH_CODE_BYTES)) (call $cw (local.get $ws) (global.get $CWH_POOL_BYTES)))))
+
+  (func $measured_node_count (export "measured_node_count") (param $ws i32) (result i32)
+    (call $cw (local.get $ws) (global.get $CWH_MEASURED_NODES)))
+  (func $measured_max_depth (export "measured_max_depth") (param $ws i32) (result i32)
+    (call $cw (local.get $ws) (global.get $CWH_MAX_DEPTH)))
+  (func $compile_diagnostic (export "compile_diagnostic") (param $ws i32) (result i32 i32 i32)
+    (call $cw (local.get $ws) (global.get $CWH_DIAGNOSTIC_CODE))
+    (call $cw (local.get $ws) (global.get $CWH_DIAGNOSTIC_KEYWORD))
+    (call $cw (local.get $ws) (global.get $CWH_DIAGNOSTIC_OFFSET)))
+  (func $compile_fuel_charged (export "compile_fuel_charged") (param $ws i32) (result i32)
+    (call $cw (local.get $ws) (global.get $CWH_FUEL_CHARGED)))
+
+  (func $map_capacity_for (param $nodes i32) (result i32)
+    (local $cap i32)
+    (local.set $cap (i32.const 16))
+    (block $done (loop $loop
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $cap) (i32.shl (local.get $nodes) (i32.const 1))))
+      (local.set $cap (i32.shl (local.get $cap) (i32.const 1)))
+      (br $loop)))
+    (local.get $cap))
+
+  (func $emission_workspace_size (export "emission_workspace_size") (param $ws i32) (result i32)
+    (if (i32.ne (call $cw (local.get $ws) (global.get $CWH_PASS)) (global.get $PASS_COMPLETE)) (then (return (i32.const -1))))
+    (i32.add (call $compile_workspace_size (call $cw (local.get $ws) (global.get $CWH_SCHEMA_BYTES)))
+             (i32.shl (call $map_capacity_for (call $cw (local.get $ws) (global.get $CWH_MEASURED_NODES))) (i32.const 3))))
+
+  ;; Prepare the emission workspace and the program buffer from a
+  ;; completed measurement. The schema bytes must still be at the address
+  ;; the measurement saw (rebind by passing it again to emit_program).
+  (func $initialize_emission_impl
+    (param $mws i32) (param $ws i32) (param $ws_capacity i32) (param $program i32) (param $program_capacity i32) (result i32)
+    (local $nodes i32) (local $size i32) (local $off i32) (local $status i32) (local $cap i32)
+    (if (i32.ne (call $cw (local.get $mws) (global.get $CWH_PASS)) (global.get $PASS_COMPLETE)) (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.lt_u (local.get $ws_capacity) (call $emission_workspace_size (local.get $mws))) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (local.set $size (call $measured_program_size (local.get $mws)))
+    (if (i32.lt_u (local.get $program_capacity) (local.get $size)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (local.set $nodes (call $cw (local.get $mws) (global.get $CWH_MEASURED_NODES)))
+    (if (i32.ne (local.get $mws) (local.get $ws))
+      (then (call $work_copy (local.get $ws) (local.get $mws) (global.get $CW_HEADER_SIZE))))
+    (call $cw_set (local.get $ws) (global.get $CWH_PASS) (global.get $PASS_EMIT))
+    (call $cw_set (local.get $ws) (global.get $CWH_PROGRAM_ADDRESS) (local.get $program))
+    (call $cw_set (local.get $ws) (global.get $CWH_PROGRAM_CAPACITY) (local.get $size))
+    (call $cw_set (local.get $ws) (global.get $CWH_FINAL_PHASE) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_FINAL_CURSOR) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_FINAL_TABLE) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_TRACK_SEEDED) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_DIAGNOSTIC_CODE) (i32.const 0))
+    (local.set $off (global.get $CW_HEADER_SIZE))
+    (call $cw_set (local.get $ws) (global.get $CWH_KEYWORD_TABLE_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (global.get $CW_KEYWORD_TABLE_BYTES)))
+    (call $cw_set (local.get $ws) (global.get $CWH_POINTER_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (i32.shl (global.get $MAX_POINTER_BYTES) (i32.const 1))))
+    (call $cw_set (local.get $ws) (global.get $CWH_FRAMES_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (i32.mul (global.get $MAX_STATIC_DEPTH) (global.get $CW_FRAME_SIZE))))
+    (call $cw_set (local.get $ws) (global.get $CWH_VISITED_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (call $align8 (i32.add (i32.shr_u (call $cw (local.get $ws) (global.get $CWH_SCHEMA_BYTES)) (i32.const 3)) (i32.const 8)))))
+    (call $cw_set (local.get $ws) (global.get $CWH_EXTRA_OFFSET) (local.get $off))
+    (local.set $off (i32.add (local.get $off) (i32.shl (global.get $CW_EXTRA_CAPACITY) (i32.const 3))))
+    (local.set $off (call $layout_regex_regions (local.get $ws) (local.get $off)))
+    (local.set $off (call $layout_resource_regions (local.get $ws) (local.get $off)))
+    (local.set $cap (call $map_capacity_for (local.get $nodes)))
+    (call $cw_set (local.get $ws) (global.get $CWH_MAP_OFFSET) (local.get $off))
+    (call $cw_set (local.get $ws) (global.get $CWH_MAP_CAPACITY) (local.get $cap))
+    (call $work_zero (i32.add (local.get $ws) (local.get $off)) (i32.const 0) (i32.shl (local.get $cap) (i32.const 3)))
+    ;; program header
+    (call $work_zero (local.get $program) (i32.const 0) (global.get $PROGRAM_HEADER_SIZE))
+    (i32.store (i32.add (local.get $program) (global.get $PH_MAGIC)) (global.get $PROGRAM_MAGIC))
+    (i32.store (i32.add (local.get $program) (global.get $PH_VERSION)) (global.get $PROGRAM_VERSION))
+    (i32.store (i32.add (local.get $program) (global.get $PH_TOTAL_BYTES)) (local.get $size))
+    (i32.store (i32.add (local.get $program) (global.get $PH_NODE_COUNT)) (local.get $nodes))
+    (i32.store (i32.add (local.get $program) (global.get $PH_NODE_TABLE_OFFSET)) (global.get $PROGRAM_HEADER_SIZE))
+    (i32.store (i32.add (local.get $program) (global.get $PH_CODE_OFFSET))
+      (i32.add (global.get $PROGRAM_HEADER_SIZE) (i32.mul (local.get $nodes) (global.get $NODE_SIZE))))
+    (i32.store (i32.add (local.get $program) (global.get $PH_CODE_BYTES)) (call $cw (local.get $mws) (global.get $CWH_CODE_BYTES)))
+    (i32.store (i32.add (local.get $program) (global.get $PH_POOL_OFFSET))
+      (i32.add (i32.add (global.get $PROGRAM_HEADER_SIZE) (i32.mul (local.get $nodes) (global.get $NODE_SIZE)))
+               (call $cw (local.get $mws) (global.get $CWH_CODE_BYTES))))
+    (i32.store (i32.add (local.get $program) (global.get $PH_POOL_BYTES)) (call $cw (local.get $mws) (global.get $CWH_POOL_BYTES)))
+    (i32.store (i32.add (local.get $program) (global.get $PH_MAX_STATIC_DEPTH)) (call $cw (local.get $mws) (global.get $CWH_MAX_DEPTH)))
+    (i32.store (i32.add (local.get $program) (global.get $PH_FLAGS)) (call $cw (local.get $mws) (global.get $CWH_OPTIONS)))
+    (i32.store (i32.add (local.get $program) (global.get $PH_SCHEMA_BYTES)) (call $cw (local.get $mws) (global.get $CWH_SCHEMA_BYTES)))
+    (call $work_zero (i32.add (local.get $program) (global.get $PROGRAM_HEADER_SIZE)) (i32.const 0) (i32.mul (local.get $nodes) (global.get $NODE_SIZE)))
+    (call $cw_set (local.get $ws) (global.get $CWH_CODE_CURSOR) (i32.load (i32.add (local.get $program) (global.get $PH_CODE_OFFSET))))
+    (call $cw_set (local.get $ws) (global.get $CWH_POOL_CURSOR) (i32.load (i32.add (local.get $program) (global.get $PH_POOL_OFFSET))))
+    (call $cw_set (local.get $ws) (global.get $CWH_CODE_BYTES) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_POOL_BYTES) (i32.const 0))
+    (local.set $status (call $init_walk (local.get $ws)))
+    (if (local.get $status) (then (return (local.get $status))))
+    (i32.store (i32.add (local.get $program) (global.get $PH_ROOT_NODE)) (call $cw (local.get $ws) (global.get $CWH_ROOT_NODE)))
+    (global.get $STATUS_OK))
+
+  ;; Resolve REF operands from schema offsets to node ids.
+  (func $fixup (param $ws i32) (result i32)
+    (local $program i32) (local $pc i32) (local $end i32) (local $op i32) (local $a i32) (local $id i32) (local $d i32) (local $target i32) (local $kind i32)
+    (local $b i32) (local $keep i32) (local $res i32)
+    (local.set $program (call $prog (local.get $ws)))
+    (local.set $pc (i32.load (i32.add (local.get $program) (global.get $PH_CODE_OFFSET))))
+    (local.set $end (i32.add (local.get $pc) (i32.load (i32.add (local.get $program) (global.get $PH_CODE_BYTES)))))
+    (block $done (loop $loop
+        (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $pc) (local.get $end)))
+      (local.set $op (i32.load (i32.add (local.get $program) (local.get $pc))))
+      (if (i32.or (i32.eq (local.get $op) (global.get $OP_REF)) (i32.eq (local.get $op) (global.get $OP_DYNAMIC_REF)))
+        (then
+          (local.set $a (i32.load offset=4 (i32.add (local.get $program) (local.get $pc))))
+          (if (i32.and (local.get $a) (i32.const 0x80000000))
+            (then
+              (local.set $d (call $dref_addr (local.get $ws) (i32.and (local.get $a) (i32.const 0x7fffffff))))
+              (local.set $target (i32.load offset=12 (local.get $d)))
+              (local.set $kind (call $mp_kind (i32.add (call $schema_addr (local.get $ws)) (local.get $target)) (call $schema_end (local.get $ws))))
+              (if (i32.eq (local.get $kind) (global.get $K_TRUE)) (then (local.set $id (global.get $TRUE_NODE)))
+                (else (if (i32.eq (local.get $kind) (global.get $K_FALSE)) (then (local.set $id (global.get $FALSE_NODE)))
+                  (else (local.set $id (call $map_lookup (local.get $ws) (local.get $target)))))))
+              (if (i32.lt_s (local.get $id) (i32.const 0))
+                (then (return (call $diag (local.get $ws) (global.get $DIAG_REF_UNRESOLVABLE) (global.get $KW_REF) (i32.load (local.get $d)) (global.get $STATUS_SYNTAX_ERROR)))))
+              (i32.store offset=4 (i32.add (local.get $program) (local.get $pc)) (local.get $id))
+              ;; $dynamicRef only stays dynamic when the lexical target's
+              ;; resource declares the anchor dynamically (bookending)
+              (if (i32.eq (local.get $op) (global.get $OP_DYNAMIC_REF))
+                (then
+                  (local.set $b (i32.load offset=8 (i32.add (local.get $program) (local.get $pc))))
+                  (local.set $keep (i32.const 0))
+                  (if (i32.ne (local.get $b) (global.get $NONE))
+                    (then
+                      (local.set $res (i32.shr_u (i32.load offset=12 (call $node_addr (local.get $program) (local.get $id))) (i32.const 16)))
+                      (if (i32.ge_s (call $find_anchor (local.get $ws) (local.get $res)
+                                                        (i32.add (i32.add (local.get $program) (local.get $b)) (i32.const 4))
+                                                        (i32.load (i32.add (local.get $program) (local.get $b))) (i32.const 1))
+                                    (i32.const 0))
+                        (then (local.set $keep (i32.const 1))))))
+                  (if (i32.eqz (local.get $keep))
+                    (then (i32.store (i32.add (local.get $program) (local.get $pc)) (global.get $OP_REF))))))))))
+      (local.set $pc (i32.add (local.get $pc) (global.get $INSTRUCTION_SIZE)))
+      (br $loop)))
+    (global.get $STATUS_OK))
+
+  (func $node_flag_set (param $program i32) (param $node i32) (param $flag i32) (result i32)
+    (local $entry i32)
+    (local.set $entry (call $node_addr (local.get $program) (local.get $node)))
+    (if (i32.and (i32.load offset=12 (local.get $entry)) (local.get $flag)) (then (return (i32.const 0))))
+    (i32.store offset=12 (local.get $entry) (i32.or (i32.load offset=12 (local.get $entry)) (local.get $flag)))
+    (i32.const 1))
+
+  ;; Nodes carrying unevaluated* track their evaluated set, and so must
+  ;; every same-value applicator child they reach (allOf/anyOf/oneOf/if/
+  ;; then/else/$ref/dependentSchemas), so annotations can flow upward.
+  (func $mark_tracked_nodes (param $ws i32) (param $program i32) (result i32)
+    (local $nodes i32) (local $i i32) (local $pc i32) (local $op i32) (local $a i32) (local $b i32) (local $c i32) (local $changed i32)
+    (local $list i32) (local $count i32) (local $j i32) (local $table i32) (local $cap i32) (local $entries i32) (local $e i32) (local $dep i32)
+    (local.set $nodes (call $ph (local.get $program) (global.get $PH_NODE_COUNT)))
+    ;; Seed once; each propagation sweep is a separate atomic step.
+    (if (i32.eqz (call $cw (local.get $ws) (global.get $CWH_TRACK_SEEDED)))
+      (then
+    (local.set $i (i32.const 0))
+    (block $sd (loop $sl
+        (call $work_add (i32.const 1))
+      (br_if $sd (i32.ge_u (local.get $i) (local.get $nodes)))
+      (local.set $pc (call $node_code (local.get $program) (local.get $i)))
+      (block $rd (loop $rl
+        (call $work_add (i32.const 1))
+        (local.set $op (i32.load (i32.add (local.get $program) (local.get $pc))))
+        (br_if $rd (i32.eq (local.get $op) (global.get $OP_END)))
+        (if (i32.or (i32.eq (local.get $op) (global.get $OP_UNEVALUATED_PROPERTIES)) (i32.eq (local.get $op) (global.get $OP_UNEVALUATED_ITEMS)))
+          (then (drop (call $node_flag_set (local.get $program) (local.get $i) (global.get $NODE_FLAG_TRACK)))))
+        (local.set $pc (i32.add (local.get $pc) (global.get $INSTRUCTION_SIZE)))
+        (br $rl)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $sl)))
+        (call $cw_set (local.get $ws) (global.get $CWH_TRACK_SEEDED) (i32.const 1))))
+    ;; propagate to a fixpoint
+    (local.set $changed (i32.const 1))
+    (block $fix (loop $fl
+        (call $work_add (i32.const 1))
+      (br_if $fix (i32.eqz (local.get $changed)))
+      (local.set $changed (i32.const 0))
+      (local.set $i (i32.const 0))
+      (block $nd (loop $nl
+        (call $work_add (i32.const 1))
+        (br_if $nd (i32.ge_u (local.get $i) (local.get $nodes)))
+        (if (i32.and (i32.load offset=12 (call $node_addr (local.get $program) (local.get $i))) (global.get $NODE_FLAG_TRACK))
+          (then
+            (local.set $pc (call $node_code (local.get $program) (local.get $i)))
+            (block $rd2 (loop $rl2
+        (call $work_add (i32.const 1))
+              (local.set $op (i32.load (i32.add (local.get $program) (local.get $pc))))
+              (local.set $a (i32.load offset=4 (i32.add (local.get $program) (local.get $pc))))
+              (local.set $b (i32.load offset=8 (i32.add (local.get $program) (local.get $pc))))
+              (local.set $c (i32.load offset=12 (i32.add (local.get $program) (local.get $pc))))
+              (br_if $rd2 (i32.eq (local.get $op) (global.get $OP_END)))
+              (if (i32.or (i32.eq (local.get $op) (global.get $OP_ALL_OF))
+                          (i32.or (i32.eq (local.get $op) (global.get $OP_ANY_OF)) (i32.eq (local.get $op) (global.get $OP_ONE_OF))))
+                (then
+                  (local.set $count (i32.load (i32.add (local.get $program) (local.get $a))))
+                  (local.set $j (i32.const 0))
+                  (block $ld (loop $ll
+        (call $work_add (i32.const 1))
+                    (br_if $ld (i32.ge_u (local.get $j) (local.get $count)))
+                    (local.set $changed (i32.or (local.get $changed)
+                      (call $node_flag_set (local.get $program) (call $list_item (local.get $program) (local.get $a) (local.get $j)) (global.get $NODE_FLAG_TRACK))))
+                    (local.set $j (i32.add (local.get $j) (i32.const 1)))
+                    (br $ll)))))
+              (if (i32.or (i32.eq (local.get $op) (global.get $OP_REF)) (i32.eq (local.get $op) (global.get $OP_DYNAMIC_REF)))
+                (then (local.set $changed (i32.or (local.get $changed) (call $node_flag_set (local.get $program) (local.get $a) (global.get $NODE_FLAG_TRACK))))))
+              ;; a $dynamicRef can land on any resource's same-named dynamic
+              ;; anchor at runtime, so every candidate tracks too
+              (if (i32.and (i32.eq (local.get $op) (global.get $OP_DYNAMIC_REF)) (i32.ne (local.get $b) (global.get $NONE)))
+                (then (local.set $changed (i32.or (local.get $changed) (call $mark_dynamic_anchor_targets (local.get $program) (local.get $b))))))
+              (if (i32.eq (local.get $op) (global.get $OP_IF))
+                (then
+                  (local.set $changed (i32.or (local.get $changed) (call $node_flag_set (local.get $program) (local.get $a) (global.get $NODE_FLAG_TRACK))))
+                  (if (i32.ne (local.get $b) (global.get $NONE))
+                    (then (local.set $changed (i32.or (local.get $changed) (call $node_flag_set (local.get $program) (local.get $b) (global.get $NODE_FLAG_TRACK))))))
+                  (if (i32.ne (local.get $c) (global.get $NONE))
+                    (then (local.set $changed (i32.or (local.get $changed) (call $node_flag_set (local.get $program) (local.get $c) (global.get $NODE_FLAG_TRACK))))))))
+              (if (i32.eq (local.get $op) (global.get $OP_OBJECT_PASS))
+                (then
+                  (local.set $table (i32.add (local.get $program) (local.get $a)))
+                  (local.set $cap (i32.load offset=4 (local.get $table)))
+                  (local.set $entries (i32.add (local.get $program) (i32.load offset=8 (local.get $table))))
+                  (local.set $j (i32.const 0))
+                  (block $ed (loop $el
+        (call $work_add (i32.const 1))
+                    (br_if $ed (i32.ge_u (local.get $j) (local.get $cap)))
+                    (local.set $e (i32.add (local.get $entries) (i32.mul (local.get $j) (global.get $OE_SIZE))))
+                    (if (i32.and (i32.ne (i32.load offset=4 (local.get $e)) (global.get $NONE)) (i32.ne (i32.load offset=16 (local.get $e)) (global.get $NONE)))
+                      (then
+                        (local.set $dep (i32.load offset=4 (i32.add (local.get $program) (i32.load offset=16 (local.get $e)))))
+                        (if (i32.ne (local.get $dep) (global.get $NONE))
+                          (then (local.set $changed (i32.or (local.get $changed) (call $node_flag_set (local.get $program) (local.get $dep) (global.get $NODE_FLAG_TRACK))))))))
+                    (local.set $j (i32.add (local.get $j) (i32.const 1)))
+                    (br $el)))))
+              (local.set $pc (i32.add (local.get $pc) (global.get $INSTRUCTION_SIZE)))
+              (br $rl2)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $nl)))
+      (return (select (global.get $STATUS_PAUSED) (global.get $STATUS_OK) (local.get $changed)))))
+    (global.get $STATUS_OK))
+
+  ;; Flag every node declaring dynamic anchor `name` (a pool string
+  ;; offset) in any resource; returns 1 when a flag was newly set.
+  (func $mark_dynamic_anchor_targets (param $program i32) (param $name i32) (result i32)
+    (local $table i32) (local $res i32) (local $count i32) (local $list i32) (local $n i32) (local $j i32) (local $entry i32) (local $cand i32)
+    (local $nlen i32) (local $changed i32)
+    (local.set $table (i32.add (local.get $program) (call $ph (local.get $program) (global.get $PH_RESOURCE_TABLE_OFFSET))))
+    (local.set $count (call $ph (local.get $program) (global.get $PH_RESOURCE_COUNT)))
+    (local.set $nlen (i32.load (i32.add (local.get $program) (local.get $name))))
+    (block $done (loop $l
+        (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $res) (local.get $count)))
+      (local.set $list (i32.add (local.get $program) (i32.load offset=4 (i32.add (local.get $table) (i32.shl (local.get $res) (i32.const 3))))))
+      (local.set $n (i32.load (local.get $list)))
+      (local.set $j (i32.const 0))
+      (block $ad (loop $al
+        (call $work_add (i32.const 1))
+        (br_if $ad (i32.ge_u (local.get $j) (local.get $n)))
+        (local.set $entry (i32.add (local.get $list) (i32.add (i32.const 4) (i32.shl (local.get $j) (i32.const 3)))))
+        (local.set $cand (i32.add (local.get $program) (i32.load (local.get $entry))))
+        (if (i32.eq (i32.load (local.get $cand)) (local.get $nlen))
+          (then
+            (if (call $bytes_equal (i32.add (local.get $cand) (i32.const 4)) (i32.add (i32.add (local.get $program) (local.get $name)) (i32.const 4)) (local.get $nlen))
+              (then (local.set $changed (i32.or (local.get $changed)
+                      (call $node_flag_set (local.get $program) (i32.load offset=4 (local.get $entry)) (global.get $NODE_FLAG_TRACK))))))))
+        (local.set $j (i32.add (local.get $j) (i32.const 1)))
+        (br $al)))
+      (local.set $res (i32.add (local.get $res) (i32.const 1)))
+      (br $l)))
+    (local.get $changed))
+
+  (func $emit_program_impl
+    (param $ws i32) (param $ws_capacity i32) (param $schema i32) (param $program i32) (param $fuel i32) (result i32 i32)
+    (local $status i32) (local $pass i32)
+    (local.set $status (call $cw_check (local.get $ws) (local.get $ws_capacity)))
+    (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+    (local.set $pass (call $cw (local.get $ws) (global.get $CWH_PASS)))
+    (if (i32.ne (local.get $pass) (global.get $PASS_EMIT))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM) (local.get $fuel))))
+    (call $cw_set (local.get $ws) (global.get $CWH_SCHEMA_ADDRESS) (local.get $schema))
+    (call $cw_set (local.get $ws) (global.get $CWH_PROGRAM_ADDRESS) (local.get $program))
+    (if (i32.eqz (call $cw (local.get $ws) (global.get $CWH_FINAL_PHASE)))
+      (then
+        (call $walk (local.get $ws) (local.get $fuel))
+        (local.set $fuel) (local.set $status)
+        (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+        (call $cw_set (local.get $ws) (global.get $CWH_FINAL_PHASE) (i32.const 1))))
+    (if (i32.eq (call $cw (local.get $ws) (global.get $CWH_FINAL_PHASE)) (i32.const 1))
+      (then
+        (call $finish_resources (local.get $ws) (local.get $fuel))
+        (local.set $fuel) (local.set $status)
+        (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+        (call $cw_set (local.get $ws) (global.get $CWH_FINAL_PHASE) (i32.const 2))))
+    (local.set $fuel (call $work_take (local.get $fuel)))
+    (if (i32.le_s (local.get $fuel) (i32.const 0))
+      (then (return (global.get $STATUS_PAUSED) (local.get $fuel))))
+    (if (i32.eq (call $cw (local.get $ws) (global.get $CWH_FINAL_PHASE)) (i32.const 2))
+      (then
+    ;; measure/emit must agree exactly
+    (if (i32.ne (call $cw (local.get $ws) (global.get $CWH_CODE_CURSOR)) (i32.load (i32.add (local.get $program) (global.get $PH_POOL_OFFSET))))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM) (local.get $fuel))))
+    ;; the pool may end short of the measured bound (measure counts keys
+    ;; before deduplication); the header takes the real extent
+    (if (i32.gt_u (call $cw (local.get $ws) (global.get $CWH_POOL_CURSOR)) (i32.load (i32.add (local.get $program) (global.get $PH_TOTAL_BYTES))))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM) (local.get $fuel))))
+    (i32.store (i32.add (local.get $program) (global.get $PH_TOTAL_BYTES)) (call $cw (local.get $ws) (global.get $CWH_POOL_CURSOR)))
+    (i32.store (i32.add (local.get $program) (global.get $PH_POOL_BYTES))
+      (i32.sub (call $cw (local.get $ws) (global.get $CWH_POOL_CURSOR)) (i32.load (i32.add (local.get $program) (global.get $PH_POOL_OFFSET)))))
+    (if (i32.ne (call $cw (local.get $ws) (global.get $CWH_NODE_COUNT)) (i32.load (i32.add (local.get $program) (global.get $PH_NODE_COUNT))))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM) (local.get $fuel))))
+    (i32.store (i32.add (local.get $program) (global.get $PH_MAX_REGEX_CONTINUATION)) (call $cw (local.get $ws) (global.get $CWH_MAX_REGEX_CONTINUATION)))
+    (i32.store (i32.add (local.get $program) (global.get $PH_ROUTE_COUNT)) (call $cw (local.get $ws) (global.get $CWH_ROUTE_COUNT)))
+    (if (call $cw (local.get $ws) (global.get $CWH_ROUTE_COUNT))
+      (then
+        (i32.store (i32.add (local.get $program) (global.get $PH_ROUTE_TABLE)) (call $cw (local.get $ws) (global.get $CWH_ROUTE_TABLE)))
+        (i32.store (i32.add (local.get $program) (global.get $PH_GATE_TABLE)) (call $cw (local.get $ws) (global.get $CWH_GATE_TABLE)))
+        (i32.store (i32.add (local.get $program) (global.get $PH_GATE_CAPACITY)) (call $cw (local.get $ws) (global.get $CWH_GATE_CAP)))))
+        (local.set $status (call $fixup (local.get $ws)))
+        (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+        (call $cw_set (local.get $ws) (global.get $CWH_FINAL_PHASE) (i32.const 3))))
+    (block $tracked (loop $sweep
+      (local.set $fuel (call $work_take (local.get $fuel)))
+      (if (i32.le_s (local.get $fuel) (i32.const 0))
+        (then (return (global.get $STATUS_PAUSED) (local.get $fuel))))
+      (br_if $tracked (i32.eq (call $cw (local.get $ws) (global.get $CWH_FINAL_PHASE)) (i32.const 4)))
+      (local.set $status (call $mark_tracked_nodes (local.get $ws) (local.get $program)))
+      (if (i32.eq (local.get $status) (global.get $STATUS_OK))
+        (then (call $cw_set (local.get $ws) (global.get $CWH_FINAL_PHASE) (i32.const 4))))
+      (br $sweep)))
+    (local.set $status (call $validate_program (local.get $program) (i32.load (i32.add (local.get $program) (global.get $PH_TOTAL_BYTES)))))
+    (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+    (call $cw_set (local.get $ws) (global.get $CWH_PASS) (global.get $PASS_COMPLETE))
+    (global.get $STATUS_OK) (local.get $fuel))
+
+  ;; ==========================================================================
+  ;; Schema sets. A set program compiles N routes (the bundle root is an
+  ;; array of schemas) into one program: every route is an ordinary node
+  ;; tree whose pointer text starts at "#" (so its errors read exactly as
+  ;; the route compiled alone), plus a route table and a gate table.
+  ;;
+  ;; Gates are the conjunction of top-level constraints decidable from one
+  ;; (key, value) pair of the document: every `required` name is a
+  ;; presence gate; for a required name whose `properties` subschema is
+  ;; only const/enum/type (plus annotations), the const/enum members are
+  ;; value gates and type is a type gate. A route whose root holds nothing
+  ;; but those keywords (and `type: 'object'`, identifiers, annotations,
+  ;; $defs) is FULLY gated: all gates hit means matched with no evaluation.
+  ;; Anything else is evaluated by the VM when its gates pass (TEST mode)
+  ;; or always (VALIDATE mode, so error lists equal single validation).
+  ;;
+  ;; route table entry (16): [node:4][gate count:4][flags:4][reserved:4]
+  ;; gate table entry (20):  [hash:4][key pool string:4][value pool record
+  ;;   or NONE:4][type mask:4][bitset pool offset:4]; open addressing on
+  ;;   hash, an entry with key 0 is empty; the bitset holds one bit per
+  ;;   route.
+  ;; ==========================================================================
+  (global $OPT_SET i32 (i32.const 16))
+  (global $GATE_ENTRY_SIZE i32 (i32.const 20))
+  (global $ROUTE_ENTRY_SIZE i32 (i32.const 16))
+  (global $ROUTE_FLAG_FULL i32 (i32.const 1))
+  (global $ROUTE_FLAG_ROOT_OBJECT i32 (i32.const 2))
+  (global $GATE_PRESENCE i32 (i32.const 1))
+  (global $GATE_VALUE i32 (i32.const 2))
+  (global $GATE_TYPE i32 (i32.const 3))
+  (global $MAX_ROUTES i32 (i32.const 65536))
+  (global $CWH_ROUTE_COUNT i32 (i32.const 256))
+  (global $CWH_GATE_COUNT i32 (i32.const 260))
+  (global $CWH_GATE_TABLE i32 (i32.const 264))
+  (global $CWH_GATE_CAP i32 (i32.const 268))
+  (global $CWH_ROUTE_TABLE i32 (i32.const 272))
+  (global $CWH_ROUTE_INDEX i32 (i32.const 276))
+  (global $CWH_ROUTE_NEXT i32 (i32.const 280))
+  (global $CF_ROUTE i32 (i32.const 320))   ;; route index + 1 on a route root frame, else 0
+
+  (func $bitset_bytes (param $routes i32) (result i32)
+    (i32.shl (i32.shr_u (i32.add (local.get $routes) (i32.const 31)) (i32.const 5)) (i32.const 2)))
+
+  (func $gate_cap_for (param $count i32) (result i32)
+    (local $cap i32)
+    (local.set $cap (i32.const 8))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $cap) (i32.shl (i32.add (local.get $count) (i32.const 1)) (i32.const 1))))
+      (local.set $cap (i32.shl (local.get $cap) (i32.const 1)))
+      (br $l)))
+    (local.get $cap))
+
+  ;; Key hash folded with the gate kind (and the value's structural hash
+  ;; for value gates) — the same function the runtime probes with.
+  (func $gate_hash (param $key i32) (param $key_len i32) (param $kind i32) (param $value_hash i32) (result i32)
+    (local $h i32)
+    (local.set $h (call $fnv1a (local.get $key) (local.get $key_len)))
+    (local.set $h (i32.mul (i32.xor (local.get $h) (i32.mul (local.get $kind) (i32.const 0x9e3779b1))) (i32.const 0x01000193)))
+    (local.set $h (i32.xor (local.get $h) (i32.mul (local.get $value_hash) (i32.const 0x85ebca6b))))
+    (local.set $h (i32.xor (local.get $h) (i32.shr_u (local.get $h) (i32.const 15))))
+    (select (local.get $h) (i32.const 1) (i32.ne (local.get $h) (i32.const 0))))
+
+  (func $route_entry (param $ws i32) (param $route i32) (result i32)
+    (i32.add (i32.add (call $prog (local.get $ws)) (call $cw (local.get $ws) (global.get $CWH_ROUTE_TABLE)))
+             (i32.mul (local.get $route) (global.get $ROUTE_ENTRY_SIZE))))
+
+  ;; Set-mode initialization after the bundle: the root must be an array
+  ;; of routes. Allocates the route table (both passes) and, when
+  ;; emitting, the gate table sized from the measured gate count.
+  (func $init_set (param $ws i32) (result i32)
+    (local $root i32) (local $end i32) (local $kind i32) (local $h i32) (local $n i32) (local $off i32) (local $cap i32)
+    (call $cw_set (local.get $ws) (global.get $CWH_ROUTE_COUNT) (i32.const 0))
+    (if (i32.eqz (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (global.get $OPT_SET)))
+      (then
+        (call $cw_set (local.get $ws) (global.get $CWH_GATE_COUNT) (i32.const 0))
+        (return (global.get $STATUS_OK))))
+    (local.set $root (i32.add (call $schema_addr (local.get $ws)) (call $cw (local.get $ws) (global.get $CWH_ROOT_VOFF))))
+    (local.set $end (call $schema_end (local.get $ws)))
+    (call $mp_header (local.get $root) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_ARRAY))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_SCHEMA_NOT_OBJECT) (i32.const 0) (call $cw (local.get $ws) (global.get $CWH_ROOT_VOFF)) (global.get $STATUS_SYNTAX_ERROR)))))
+    (if (i32.or (i32.eqz (local.get $n)) (i32.gt_u (local.get $n) (global.get $MAX_ROUTES)))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (i32.const 0) (call $cw (local.get $ws) (global.get $CWH_ROOT_VOFF)) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (call $cw_set (local.get $ws) (global.get $CWH_ROUTE_COUNT) (local.get $n))
+    (call $cw_set (local.get $ws) (global.get $CWH_ROUTE_INDEX) (i32.const 0))
+    (call $cw_set (local.get $ws) (global.get $CWH_ROUTE_NEXT) (i32.add (call $cw (local.get $ws) (global.get $CWH_ROOT_VOFF)) (local.get $h)))
+    (local.set $off (call $pool_alloc (local.get $ws) (i32.mul (local.get $n) (global.get $ROUTE_ENTRY_SIZE))))
+    (if (i32.lt_s (local.get $off) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (call $cw_set (local.get $ws) (global.get $CWH_ROUTE_TABLE) (local.get $off))
+    (if (call $emitting (local.get $ws))
+      (then
+        ;; the measured count rode over in the copied header
+        (local.set $cap (call $gate_cap_for (call $cw (local.get $ws) (global.get $CWH_GATE_COUNT))))
+        (local.set $off (call $pool_alloc (local.get $ws) (i32.mul (local.get $cap) (global.get $GATE_ENTRY_SIZE))))
+        (if (i32.lt_s (local.get $off) (i32.const 0)) (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+        (call $cw_set (local.get $ws) (global.get $CWH_GATE_TABLE) (local.get $off))
+        (call $cw_set (local.get $ws) (global.get $CWH_GATE_CAP) (local.get $cap))))
+    (call $cw_set (local.get $ws) (global.get $CWH_GATE_COUNT) (i32.const 0))
+    ;; no fixed root node: routes take ids as they are pushed
+    (call $cw_set (local.get $ws) (global.get $CWH_NODE_COUNT) (i32.const 2))
+    (call $cw_set (local.get $ws) (global.get $CWH_ROOT_NODE) (global.get $TRUE_NODE))
+    (global.get $STATUS_OK))
+
+  ;; Push the next route root, if any. Returns 1 pushed, 0 none, -1 error.
+  (func $push_next_route (param $ws i32) (result i32)
+    (local $i i32) (local $count i32) (local $voff i32) (local $kind i32) (local $id i32) (local $status i32) (local $entry i32) (local $next i32)
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (local.set $i (call $cw (local.get $ws) (global.get $CWH_ROUTE_INDEX)))
+      (local.set $count (call $cw (local.get $ws) (global.get $CWH_ROUTE_COUNT)))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $voff (call $cw (local.get $ws) (global.get $CWH_ROUTE_NEXT)))
+      (local.set $next (call $mp_skip (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (call $schema_end (local.get $ws))))
+      (if (i32.lt_s (local.get $next) (i32.const 0))
+        (then (return (i32.sub (i32.const 0) (call $diag (local.get $ws) (global.get $DIAG_SCHEMA_NOT_OBJECT) (i32.const 0) (local.get $voff) (global.get $STATUS_CORRUPT_DOCUMENT))))))
+      (call $cw_set (local.get $ws) (global.get $CWH_ROUTE_NEXT) (i32.sub (local.get $next) (call $schema_addr (local.get $ws))))
+      (call $cw_set (local.get $ws) (global.get $CWH_ROUTE_INDEX) (i32.add (local.get $i) (i32.const 1)))
+      (local.set $kind (call $mp_kind (i32.add (call $schema_addr (local.get $ws)) (local.get $voff)) (call $schema_end (local.get $ws))))
+      (if (call $emitting (local.get $ws))
+        (then
+          (local.set $entry (call $route_entry (local.get $ws) (local.get $i)))
+          (i32.store offset=4 (local.get $entry) (i32.const 0))
+          (i32.store offset=8 (local.get $entry) (i32.const 0))
+          (i32.store offset=12 (local.get $entry) (i32.const 0))))
+      (if (i32.eq (local.get $kind) (global.get $K_TRUE))
+        (then
+          (if (call $emitting (local.get $ws))
+            (then
+              (i32.store (local.get $entry) (global.get $TRUE_NODE))
+              (i32.store offset=8 (local.get $entry) (global.get $ROUTE_FLAG_FULL))))
+          (if (i32.eqz (local.get $i)) (then (call $cw_set (local.get $ws) (global.get $CWH_ROOT_NODE) (global.get $TRUE_NODE))))
+          (br $l)))
+      (if (i32.eq (local.get $kind) (global.get $K_FALSE))
+        (then
+          (if (call $emitting (local.get $ws))
+            (then (i32.store (local.get $entry) (global.get $FALSE_NODE))))
+          (if (i32.eqz (local.get $i)) (then (call $cw_set (local.get $ws) (global.get $CWH_ROOT_NODE) (global.get $FALSE_NODE))))
+          (br $l)))
+      (if (i32.ne (local.get $kind) (global.get $K_MAP))
+        (then (return (i32.sub (i32.const 0) (call $diag (local.get $ws) (global.get $DIAG_SCHEMA_NOT_OBJECT) (i32.const 0) (local.get $voff) (global.get $STATUS_SYNTAX_ERROR))))))
+      (local.set $id (call $cw (local.get $ws) (global.get $CWH_NODE_COUNT)))
+      (if (i32.ge_u (local.get $id) (global.get $MAX_NODES))
+        (then (return (i32.sub (i32.const 0) (call $diag (local.get $ws) (global.get $DIAG_NODE_COUNT) (i32.const 0) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED))))))
+      (call $cw_set (local.get $ws) (global.get $CWH_NODE_COUNT) (i32.add (local.get $id) (i32.const 1)))
+      (if (call $emitting (local.get $ws)) (then (i32.store (local.get $entry) (local.get $id))))
+      (if (i32.eqz (local.get $i)) (then (call $cw_set (local.get $ws) (global.get $CWH_ROOT_NODE) (local.get $id))))
+      ;; every route's pointer text starts at "#"
+      (call $cw_set (local.get $ws) (global.get $CWH_POINTER_BYTES) (i32.const 0))
+      (drop (call $pointer_push_byte (local.get $ws) (i32.const 0x23)))
+      (local.set $status (call $cpush (local.get $ws) (local.get $voff) (local.get $id) (i32.const 1)))
+      (if (local.get $status) (then (return (i32.sub (i32.const 0) (local.get $status)))))
+      ;; the route is its own resource under the bundle's base URI
+      (local.set $status (call $append_resource (local.get $ws)
+        (call $arena_str_addr (local.get $ws) (i32.load (call $res_addr (local.get $ws) (i32.const 0))))
+        (i32.load offset=4 (call $res_addr (local.get $ws) (i32.const 0)))
+        (local.get $voff) (local.get $id)))
+      (if (i32.lt_s (local.get $status) (i32.const 0)) (then (return (local.get $status))))
+      (call $cf_set (call $ctop (local.get $ws)) (global.get $CF_RESOURCE) (local.get $status))
+      (call $cf_set (call $ctop (local.get $ws)) (global.get $CF_ROUTE) (i32.add (local.get $i) (i32.const 1)))
+      (return (i32.const 1))))
+    (i32.const 0))
+
+  ;; Insert one gate for a route. Counting only in MEASURE. Returns 1 when
+  ;; the route gained a new gate, 0 when it already had this one, or a
+  ;; negated status.
+  (func $gate_insert (param $ws i32) (param $route i32) (param $kind i32) (param $key i32) (param $key_len i32)
+                     (param $value_voff i32) (param $mask i32) (result i32)
+    (local $hash i32) (local $vhash i32) (local $vaddr i32) (local $vend i32) (local $table i32) (local $cap i32) (local $i i32) (local $entry i32)
+    (local $word i32) (local $bits i32) (local $bit i32) (local $kstr i32) (local $eq i32) (local $pv i32) (local $prog i32)
+    (local.set $vhash (i32.const 0))
+    (if (i32.eq (local.get $kind) (global.get $GATE_VALUE))
+      (then
+        (local.set $vaddr (i32.add (call $schema_addr (local.get $ws)) (local.get $value_voff)))
+        (local.set $vend (call $schema_end (local.get $ws)))
+        (local.set $vhash (call $mp_hash (local.get $vaddr) (local.get $vend) (i32.const 0)))))
+    ;; type gates hash on the key alone; the runtime filters by mask
+    (call $ccharge (local.get $ws) (i32.const 2))
+    (if (i32.eqz (call $emitting (local.get $ws)))
+      (then
+        ;; measure: one entry, one key string, one value record, one bitset
+        (call $cw_set (local.get $ws) (global.get $CWH_GATE_COUNT) (i32.add (call $cw (local.get $ws) (global.get $CWH_GATE_COUNT)) (i32.const 1)))
+        (drop (call $pool_string (local.get $ws) (local.get $key) (local.get $key_len)))
+        (if (i32.eq (local.get $kind) (global.get $GATE_VALUE)) (then (drop (call $pool_value (local.get $ws) (local.get $value_voff)))))
+        (drop (call $pool_alloc (local.get $ws) (call $bitset_bytes (call $cw (local.get $ws) (global.get $CWH_ROUTE_COUNT)))))
+        (return (i32.const 1))))
+    (local.set $prog (call $prog (local.get $ws)))
+    (local.set $hash (call $gate_hash (local.get $key) (local.get $key_len) (local.get $kind) (local.get $vhash)))
+    (local.set $table (i32.add (local.get $prog) (call $cw (local.get $ws) (global.get $CWH_GATE_TABLE))))
+    (local.set $cap (call $cw (local.get $ws) (global.get $CWH_GATE_CAP)))
+    (local.set $i (i32.and (local.get $hash) (i32.sub (local.get $cap) (i32.const 1))))
+    (block $found (loop $probe
+      (call $work_add (i32.const 1))
+      (local.set $entry (i32.add (local.get $table) (i32.mul (local.get $i) (global.get $GATE_ENTRY_SIZE))))
+      (if (i32.eqz (i32.load offset=4 (local.get $entry)))
+        (then
+          ;; empty: create
+          (local.set $kstr (call $pool_string (local.get $ws) (local.get $key) (local.get $key_len)))
+          (if (i32.lt_s (local.get $kstr) (i32.const 0)) (then (return (i32.sub (i32.const 0) (global.get $STATUS_BUFFER_TOO_SMALL)))))
+          (local.set $pv (global.get $NONE))
+          (if (i32.eq (local.get $kind) (global.get $GATE_VALUE))
+            (then
+              (local.set $pv (call $pool_value (local.get $ws) (local.get $value_voff)))
+              (if (i32.lt_s (local.get $pv) (i32.const 0)) (then (return (i32.sub (i32.const 0) (global.get $STATUS_BUFFER_TOO_SMALL)))))))
+          (local.set $bits (call $pool_alloc (local.get $ws) (call $bitset_bytes (call $cw (local.get $ws) (global.get $CWH_ROUTE_COUNT)))))
+          (if (i32.lt_s (local.get $bits) (i32.const 0)) (then (return (i32.sub (i32.const 0) (global.get $STATUS_BUFFER_TOO_SMALL)))))
+          (i32.store (local.get $entry) (local.get $hash))
+          (i32.store offset=4 (local.get $entry) (local.get $kstr))
+          (i32.store offset=8 (local.get $entry) (local.get $pv))
+          (i32.store offset=12 (local.get $entry) (select (local.get $mask) (i32.const 0) (i32.eq (local.get $kind) (global.get $GATE_TYPE))))
+          (i32.store offset=16 (local.get $entry) (local.get $bits))
+          (call $cw_set (local.get $ws) (global.get $CWH_GATE_COUNT) (i32.add (call $cw (local.get $ws) (global.get $CWH_GATE_COUNT)) (i32.const 1)))
+          (br $found)))
+      (if (i32.eq (i32.load (local.get $entry)) (local.get $hash))
+        (then
+          (local.set $eq (i32.const 0))
+          (local.set $kstr (i32.load offset=4 (local.get $entry)))
+          (if (i32.eq (i32.load (i32.add (local.get $prog) (local.get $kstr))) (local.get $key_len))
+            (then
+              (if (call $bytes_equal (i32.add (i32.add (local.get $prog) (local.get $kstr)) (i32.const 4)) (local.get $key) (local.get $key_len))
+                (then
+                  (local.set $pv (i32.load offset=8 (local.get $entry)))
+                  (if (i32.eq (local.get $kind) (global.get $GATE_PRESENCE))
+                    (then (local.set $eq (i32.and (i32.eq (local.get $pv) (global.get $NONE)) (i32.eqz (i32.load offset=12 (local.get $entry)))))))
+                  (if (i32.eq (local.get $kind) (global.get $GATE_TYPE))
+                    (then (local.set $eq (i32.and (i32.eq (local.get $pv) (global.get $NONE)) (i32.eq (i32.load offset=12 (local.get $entry)) (local.get $mask))))))
+                  (if (i32.eq (local.get $kind) (global.get $GATE_VALUE))
+                    (then
+                      (if (i32.ne (local.get $pv) (global.get $NONE))
+                        (then
+                          (local.set $eq (i32.eq (call $mp_equal
+                            (i32.add (i32.add (local.get $prog) (local.get $pv)) (i32.const 8))
+                            (i32.add (i32.add (i32.add (local.get $prog) (local.get $pv)) (i32.const 8)) (i32.load (i32.add (local.get $prog) (local.get $pv))))
+                            (local.get $vaddr) (local.get $vend) (i32.const 0)) (i32.const 1)))))))))))
+          (br_if $found (local.get $eq))))
+      (local.set $i (i32.and (i32.add (local.get $i) (i32.const 1)) (i32.sub (local.get $cap) (i32.const 1))))
+      (br $probe)))
+    ;; set the route's bit; a repeated gate does not count twice
+    (local.set $word (i32.add (i32.add (local.get $prog) (i32.load offset=16 (local.get $entry))) (i32.shl (i32.shr_u (local.get $route) (i32.const 5)) (i32.const 2))))
+    (local.set $bit (i32.shl (i32.const 1) (i32.and (local.get $route) (i32.const 31))))
+    (if (i32.and (i32.load (local.get $word)) (local.get $bit)) (then (return (i32.const 0))))
+    (i32.store (local.get $word) (i32.or (i32.load (local.get $word)) (local.get $bit)))
+    (i32.const 1))
+
+  ;; Is `code` a keyword a fully gated route root may carry besides the
+  ;; gate keywords themselves?
+  (func $gate_neutral_keyword (param $code i32) (result i32)
+    (i32.or
+      (i32.or
+        (i32.or (i32.eq (local.get $code) (global.get $KW_DEFS)) (i32.eq (local.get $code) (global.get $KW_DEFINITIONS)))
+        (i32.or (i32.eq (local.get $code) (global.get $KW_ID)) (i32.eq (local.get $code) (i32.const 5))))
+      (i32.or
+        (i32.or
+          (i32.or (i32.eq (local.get $code) (i32.const 6)) (i32.eq (local.get $code) (i32.const 8)))
+          (i32.or (i32.eq (local.get $code) (i32.const 10)) (i32.eq (local.get $code) (i32.const 11))))
+        (i32.or
+          (i32.or (i32.eq (local.get $code) (i32.const 12)) (i32.eq (local.get $code) (i32.const 13)))
+          (i32.and (i32.ge_u (local.get $code) (i32.const 54)) (i32.le_u (local.get $code) (i32.const 63)))))))
+
+  ;; Extract a route root's gates into the gate table and fill its route
+  ;; table entry. Runs at the root's header step in both passes.
+  (func $extract_gates (param $ws i32) (param $frame i32) (result i32)
+    (local $route i32) (local $full i32) (local $flags i32) (local $gates i32) (local $code i32) (local $v i32)
+    (local $schema i32) (local $end i32) (local $kind i32) (local $h i32) (local $n i32) (local $req i32) (local $req_end i32)
+    (local $cur i32) (local $i i32) (local $kk i32) (local $kh i32) (local $kn i32) (local $props i32) (local $props_end i32)
+    (local $sub i32) (local $sk i32) (local $sh i32) (local $sn i32) (local $j i32) (local $pk i32) (local $pcur i32) (local $pval i32)
+    (local $r i32) (local $mask i32) (local $m i32) (local $ek i32) (local $eh i32) (local $en i32) (local $ecur i32) (local $entry i32)
+    (local $found i32) (local $rcur i32) (local $rk i32) (local $rh i32) (local $rn i32) (local $rnext i32)
+    (local.set $route (i32.sub (call $cf (local.get $frame) (global.get $CF_ROUTE)) (i32.const 1)))
+    (local.set $schema (call $schema_addr (local.get $ws)))
+    (local.set $end (call $schema_end (local.get $ws)))
+    (local.set $full (i32.const 1))
+    (local.set $flags (i32.const 0))
+    (local.set $gates (i32.const 0))
+    ;; every present keyword must be a gate keyword or neutral
+    ;; slots hold codes 1..63 (64, "false", is the boolean-schema
+    ;; pseudo-keyword and shares its slot offset with CF_ROUTE)
+    (local.set $code (i32.const 1))
+    (block $kd (loop $kl
+      (call $work_add (i32.const 1))
+      (br_if $kd (i32.ge_u (local.get $code) (global.get $KEYWORD_COUNT)))
+      (if (i32.ge_s (call $sl (local.get $frame) (local.get $code)) (i32.const 0))
+        (then
+          (if (i32.eqz (i32.or
+                (i32.or (i32.eq (local.get $code) (global.get $KW_REQUIRED)) (i32.eq (local.get $code) (global.get $KW_PROPERTIES)))
+                (i32.or (i32.eq (local.get $code) (global.get $KW_TYPE)) (call $gate_neutral_keyword (local.get $code)))))
+            (then (local.set $full (i32.const 0))))))
+      (local.set $code (i32.add (local.get $code) (i32.const 1)))
+      (br $kl)))
+    ;; type: only the object type keeps a route fully gated
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_TYPE)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (call $mp_header (i32.add (local.get $schema) (local.get $v)) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+        (if (i32.and (i32.eq (local.get $kind) (global.get $K_STR))
+                     (i32.eq (call $type_name_mask (i32.add (i32.add (local.get $schema) (local.get $v)) (local.get $h)) (local.get $n)) (global.get $T_OBJECT)))
+          (then (local.set $flags (i32.or (local.get $flags) (global.get $ROUTE_FLAG_ROOT_OBJECT))))
+          (else (local.set $full (i32.const 0))))))
+    (local.set $props (i32.const -1))
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_PROPERTIES)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (local.set $props (i32.add (local.get $schema) (local.get $v)))
+        (if (i32.ne (call $mp_kind (local.get $props) (local.get $end)) (global.get $K_MAP))
+          (then (local.set $props (i32.const -1)) (local.set $full (i32.const 0))))))
+    (local.set $req (i32.const -1))
+    (local.set $v (call $sl (local.get $frame) (global.get $KW_REQUIRED)))
+    (if (i32.ge_s (local.get $v) (i32.const 0))
+      (then
+        (local.set $req (i32.add (local.get $schema) (local.get $v)))
+        (if (i32.ne (call $mp_kind (local.get $req) (local.get $end)) (global.get $K_ARRAY))
+          (then (local.set $req (i32.const -1)) (local.set $full (i32.const 0))))))
+    ;; required names: presence gates, and value/type gates from properties
+    (if (i32.ge_s (local.get $req) (i32.const 0))
+      (then
+        (call $mp_header (local.get $req) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+        (local.set $cur (i32.add (local.get $req) (local.get $h)))
+        (local.set $i (i32.const 0))
+        (block $rd (loop $rl
+          (call $work_add (i32.const 1))
+          (br_if $rd (i32.ge_u (local.get $i) (local.get $n)))
+          (call $mp_header (local.get $cur) (local.get $end)) (local.set $kn) (local.set $kh) (local.set $kk)
+          (if (i32.ne (local.get $kk) (global.get $K_STR)) (then (local.set $full (i32.const 0)) (br $rd)))
+          (local.set $r (call $gate_insert (local.get $ws) (local.get $route) (global.get $GATE_PRESENCE)
+                          (i32.add (local.get $cur) (local.get $kh)) (local.get $kn) (i32.const 0) (i32.const 0)))
+          (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $r)))))
+          (local.set $gates (i32.add (local.get $gates) (local.get $r)))
+          (if (i32.ge_s (local.get $props) (i32.const 0))
+            (then
+              (local.set $sub (call $mp_map_find (local.get $props) (local.get $end) (i32.add (local.get $cur) (local.get $kh)) (local.get $kn)))
+              (if (i32.ge_s (local.get $sub) (i32.const 0))
+                (then
+                  (call $mp_header (local.get $sub) (local.get $end)) (local.set $sn) (local.set $sh) (local.set $sk)
+                  (if (i32.eq (local.get $sk) (global.get $K_MAP))
+                    (then
+                      (local.set $pcur (i32.add (local.get $sub) (local.get $sh)))
+                      (local.set $j (i32.const 0))
+                      (block $pd (loop $pl
+                        (call $work_add (i32.const 1))
+                        (br_if $pd (i32.ge_u (local.get $j) (local.get $sn)))
+                        (call $mp_header (local.get $pcur) (local.get $end)) (local.set $en) (local.set $eh) (local.set $ek)
+                        (local.set $pval (call $mp_skip (local.get $pcur) (local.get $end)))
+                        (if (i32.lt_s (local.get $pval) (i32.const 0)) (then (local.set $full (i32.const 0)) (br $pd)))
+                        (local.set $pk (i32.const 0))
+                        (if (i32.eq (local.get $ek) (global.get $K_STR))
+                          (then (local.set $pk (call $keyword_code (local.get $ws) (i32.add (local.get $pcur) (local.get $eh)) (local.get $en)))))
+                        (if (i32.eq (local.get $pk) (global.get $KW_CONST))
+                          (then
+                            (local.set $r (call $gate_insert (local.get $ws) (local.get $route) (global.get $GATE_VALUE)
+                                            (i32.add (local.get $cur) (local.get $kh)) (local.get $kn) (i32.sub (local.get $pval) (local.get $schema)) (i32.const 0)))
+                            (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $r)))))
+                            (local.set $gates (i32.add (local.get $gates) (local.get $r))))
+                          (else
+                            (if (i32.eq (local.get $pk) (global.get $KW_ENUM))
+                              (then
+                                (call $mp_header (local.get $pval) (local.get $end)) (local.set $rn) (local.set $rh) (local.set $rk)
+                                (if (i32.ne (local.get $rk) (global.get $K_ARRAY))
+                                  (then (local.set $full (i32.const 0)))
+                                  (else
+                                    (local.set $found (i32.const 0))
+                                    (local.set $rcur (i32.add (local.get $pval) (local.get $rh)))
+                                    (local.set $m (i32.const 0))
+                                    (block $ed (loop $el
+                                      (call $work_add (i32.const 1))
+                                      (br_if $ed (i32.ge_u (local.get $m) (local.get $rn)))
+                                      (local.set $r (call $gate_insert (local.get $ws) (local.get $route) (global.get $GATE_VALUE)
+                                                      (i32.add (local.get $cur) (local.get $kh)) (local.get $kn) (i32.sub (local.get $rcur) (local.get $schema)) (i32.const 0)))
+                                      (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $r)))))
+                                      (local.set $found (i32.or (local.get $found) (local.get $r)))
+                                      (local.set $rnext (call $mp_skip (local.get $rcur) (local.get $end)))
+                                      (if (i32.lt_s (local.get $rnext) (i32.const 0)) (then (br $ed)))
+                                      (local.set $rcur (local.get $rnext))
+                                      (local.set $m (i32.add (local.get $m) (i32.const 1)))
+                                      (br $el)))
+                                    ;; one hit at most per pair: the enum counts as one gate
+                                    (local.set $gates (i32.add (local.get $gates) (local.get $found))))))
+                              (else
+                                (if (i32.eq (local.get $pk) (global.get $KW_TYPE))
+                                  (then
+                                    (local.set $mask (call $type_value_mask (local.get $ws) (local.get $pval)))
+                                    ;; draft-04: integral floats are not integers (OP_TYPE's bit 128)
+                                    (if (i32.and (local.get $mask) (i32.ne (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (global.get $OPT_DIALECT_04)) (i32.const 0)))
+                                      (then (local.set $mask (i32.or (local.get $mask) (i32.const 128)))))
+                                    (if (i32.eqz (local.get $mask))
+                                      (then (local.set $full (i32.const 0)))
+                                      (else
+                                        (local.set $r (call $gate_insert (local.get $ws) (local.get $route) (global.get $GATE_TYPE)
+                                                        (i32.add (local.get $cur) (local.get $kh)) (local.get $kn) (i32.const 0) (local.get $mask)))
+                                        (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.sub (i32.const 0) (local.get $r)))))
+                                        (local.set $gates (i32.add (local.get $gates) (local.get $r))))))
+                                  (else
+                                    (if (i32.eqz (call $gate_neutral_keyword (local.get $pk))) (then (local.set $full (i32.const 0))))))))))
+                        (local.set $pcur (call $mp_skip (local.get $pval) (local.get $end)))
+                        (if (i32.lt_s (local.get $pcur) (i32.const 0)) (then (local.set $full (i32.const 0)) (br $pd)))
+                        (local.set $j (i32.add (local.get $j) (i32.const 1)))
+                        (br $pl))))
+                    (else
+                      ;; a boolean subschema on a required name: false never
+                      ;; matches, true adds nothing; both leave evaluation on
+                      (if (i32.ne (local.get $sk) (global.get $K_TRUE)) (then (local.set $full (i32.const 0))))))))))
+          (local.set $cur (call $mp_skip (local.get $cur) (local.get $end)))
+          (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (br $rd)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $rl)))))
+    ;; properties not named by required constrain values when present
+    (if (i32.and (local.get $full) (i32.ge_s (local.get $props) (i32.const 0)))
+      (then
+        (call $mp_header (local.get $props) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+        (local.set $cur (i32.add (local.get $props) (local.get $h)))
+        (local.set $i (i32.const 0))
+        (block $qd (loop $ql
+          (call $work_add (i32.const 1))
+          (br_if $qd (i32.ge_u (local.get $i) (local.get $n)))
+          (call $mp_header (local.get $cur) (local.get $end)) (local.set $kn) (local.set $kh) (local.set $kk)
+          (local.set $found (i32.const 0))
+          (if (i32.and (i32.eq (local.get $kk) (global.get $K_STR)) (i32.ge_s (local.get $req) (i32.const 0)))
+            (then
+              (call $mp_header (local.get $req) (local.get $end)) (local.set $rn) (local.set $rh) (local.set $rk)
+              (local.set $rcur (i32.add (local.get $req) (local.get $rh)))
+              (local.set $m (i32.const 0))
+              (block $fd (loop $fl
+                (call $work_add (i32.const 1))
+                (br_if $fd (i32.ge_u (local.get $m) (local.get $rn)))
+                (call $mp_header (local.get $rcur) (local.get $end)) (local.set $en) (local.set $eh) (local.set $ek)
+                (if (i32.and (i32.eq (local.get $ek) (global.get $K_STR)) (i32.eq (local.get $en) (local.get $kn)))
+                  (then
+                    (if (call $bytes_equal (i32.add (local.get $rcur) (local.get $eh)) (i32.add (local.get $cur) (local.get $kh)) (local.get $kn))
+                      (then (local.set $found (i32.const 1)) (br $fd)))))
+                (local.set $rnext (call $mp_skip (local.get $rcur) (local.get $end)))
+                (if (i32.lt_s (local.get $rnext) (i32.const 0)) (then (br $fd)))
+                (local.set $rcur (local.get $rnext))
+                (local.set $m (i32.add (local.get $m) (i32.const 1)))
+                (br $fl)))))
+          (if (i32.eqz (local.get $found)) (then (local.set $full (i32.const 0)) (br $qd)))
+          (local.set $cur (call $mp_skip (local.get $cur) (local.get $end)))
+          (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (br $qd)))
+          (local.set $cur (call $mp_skip (local.get $cur) (local.get $end)))
+          (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (br $qd)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $ql)))))
+    (if (local.get $full) (then (local.set $flags (i32.or (local.get $flags) (global.get $ROUTE_FLAG_FULL)))))
+    (if (call $emitting (local.get $ws))
+      (then
+        (local.set $entry (call $route_entry (local.get $ws) (local.get $route)))
+        (i32.store offset=4 (local.get $entry) (local.get $gates))
+        (i32.store offset=8 (local.get $entry) (local.get $flags))))
+    (global.get $STATUS_OK))
+
+  ;; Mask for a `type` value (string or array of strings); 0 when any name
+  ;; is unknown or the shape is wrong.
+  (func $type_value_mask (param $ws i32) (param $addr i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $cur i32) (local $i i32) (local $ek i32) (local $eh i32) (local $en i32) (local $mask i32) (local $m i32)
+    (local $end i32)
+    (local.set $end (call $schema_end (local.get $ws)))
+    (call $mp_header (local.get $addr) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.eq (local.get $kind) (global.get $K_STR))
+      (then (return (call $type_name_mask (i32.add (local.get $addr) (local.get $h)) (local.get $n)))))
+    (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (i32.const 0))))
+    (local.set $cur (i32.add (local.get $addr) (local.get $h)))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (call $mp_header (local.get $cur) (local.get $end)) (local.set $en) (local.set $eh) (local.set $ek)
+      (if (i32.ne (local.get $ek) (global.get $K_STR)) (then (return (i32.const 0))))
+      (local.set $m (call $type_name_mask (i32.add (local.get $cur) (local.get $eh)) (local.get $en)))
+      (if (i32.eqz (local.get $m)) (then (return (i32.const 0))))
+      (local.set $mask (i32.or (local.get $mask) (local.get $m)))
+      (local.set $cur (call $mp_skip (local.get $cur) (local.get $end)))
+      (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (local.get $mask))
+
+  ;; MEASURE-pass accounting for the gate table itself.
+  (func $finalize_gates (param $ws i32) (result i32)
+    (local $cap i32)
+    (if (i32.eqz (i32.and (call $cw (local.get $ws) (global.get $CWH_OPTIONS)) (global.get $OPT_SET))) (then (return (global.get $STATUS_OK))))
+    (if (i32.eqz (call $emitting (local.get $ws)))
+      (then
+        (local.set $cap (call $gate_cap_for (call $cw (local.get $ws) (global.get $CWH_GATE_COUNT))))
+        (drop (call $pool_alloc (local.get $ws) (i32.mul (local.get $cap) (global.get $GATE_ENTRY_SIZE))))))
+    (global.get $STATUS_OK))
+
+  ;; ==========================================================================
+  ;; Error rendering. One stored error record becomes a msgpack map
+  ;;   { instancePath, schemaPath, keyword, params }
+  ;; or those same raw fields plus message through render_error_complete.
+  ;; Both use caller-owned scratch; the raw scratch tail (last
+  ;; RENDER_TABLE_BYTES) holds keyword/format name tables for the call.
+  ;; ==========================================================================
+  (global $RENDER_TABLE_BYTES i32 (i32.const 1280))
+
+  ;; msgpack writers over (out, cap, cursor): return the new cursor or -1.
+  ;; Primitive write attempts cost one unit even on capacity failure; raw
+  ;; payload copies add ceil(bytes/64) only when the copy is actually made.
+  (func $mpw_byte (param $out i32) (param $cap i32) (param $cur i32) (param $b i32) (result i32)
+    (call $work_add (i32.const 1))
+    (if (i32.ge_u (local.get $cur) (local.get $cap)) (then (return (i32.const -1))))
+    (i32.store8 (i32.add (local.get $out) (local.get $cur)) (local.get $b))
+    (i32.add (local.get $cur) (i32.const 1)))
+
+  (func $mpw_u32be (param $out i32) (param $cap i32) (param $cur i32) (param $v i32) (result i32)
+    (call $work_add (i32.const 1))
+    (if (i32.or (i32.gt_u (local.get $cur) (local.get $cap))
+                (i32.gt_u (i32.const 4) (i32.sub (local.get $cap) (local.get $cur))))
+      (then (return (i32.const -1))))
+    (i32.store8 (i32.add (local.get $out) (local.get $cur)) (i32.shr_u (local.get $v) (i32.const 24)))
+    (i32.store8 offset=1 (i32.add (local.get $out) (local.get $cur)) (i32.shr_u (local.get $v) (i32.const 16)))
+    (i32.store8 offset=2 (i32.add (local.get $out) (local.get $cur)) (i32.shr_u (local.get $v) (i32.const 8)))
+    (i32.store8 offset=3 (i32.add (local.get $out) (local.get $cur)) (local.get $v))
+    (i32.add (local.get $cur) (i32.const 4)))
+
+  (func $mpw_uint (param $out i32) (param $cap i32) (param $cur i32) (param $v i32) (result i32)
+    (if (i32.lt_u (local.get $v) (i32.const 128))
+      (then (return (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (local.get $v)))))
+    (if (i32.lt_u (local.get $v) (i32.const 256))
+      (then
+        (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xcc)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (return (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (local.get $v)))))
+    (if (i32.lt_u (local.get $v) (i32.const 65536))
+      (then
+        (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xcd)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.shr_u (local.get $v) (i32.const 8))))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (return (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (local.get $v)))))
+    (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xce)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (call $mpw_u32be (local.get $out) (local.get $cap) (local.get $cur) (local.get $v)))
+
+  (func $mpw_map (param $out i32) (param $cap i32) (param $cur i32) (param $n i32) (result i32)
+    (if (i32.lt_u (local.get $n) (i32.const 16))
+      (then (return (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.or (i32.const 0x80) (local.get $n))))))
+    (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xdf)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (call $mpw_u32be (local.get $out) (local.get $cap) (local.get $cur) (local.get $n)))
+
+  (func $mpw_array (param $out i32) (param $cap i32) (param $cur i32) (param $n i32) (result i32)
+    (if (i32.lt_u (local.get $n) (i32.const 16))
+      (then (return (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.or (i32.const 0x90) (local.get $n))))))
+    (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xdd)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (call $mpw_u32be (local.get $out) (local.get $cap) (local.get $cur) (local.get $n)))
+
+  (func $mpw_raw (param $out i32) (param $cap i32) (param $cur i32) (param $addr i32) (param $len i32) (result i32)
+    (call $work_add (i32.const 1))
+    (if (i32.or (i32.gt_u (local.get $cur) (local.get $cap))
+                (i32.gt_u (local.get $len) (i32.sub (local.get $cap) (local.get $cur))))
+      (then (return (i32.const -1))))
+    (call $work_copy (i32.add (local.get $out) (local.get $cur)) (local.get $addr) (local.get $len))
+    (i32.add (local.get $cur) (local.get $len)))
+
+  (func $mpw_str (param $out i32) (param $cap i32) (param $cur i32) (param $addr i32) (param $len i32) (result i32)
+    (if (i32.lt_u (local.get $len) (i32.const 32))
+      (then (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.or (i32.const 0xa0) (local.get $len)))))
+      (else
+        (if (i32.lt_u (local.get $len) (i32.const 256))
+          (then
+            (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xd9)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (local.get $len))))
+          (else
+            (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xdb)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $cur (call $mpw_u32be (local.get $out) (local.get $cap) (local.get $cur) (local.get $len)))))))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (call $mpw_raw (local.get $out) (local.get $cap) (local.get $cur) (local.get $addr) (local.get $len)))
+
+  ;; NUL-terminated literal key from a passive data segment copied to the
+  ;; scratch tail. Keys are written by (table offset, length).
+  (func $mpw_key (param $out i32) (param $cap i32) (param $cur i32) (param $tables i32) (param $off i32) (param $len i32) (result i32)
+    (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur) (i32.add (local.get $tables) (local.get $off)) (local.get $len)))
+
+  ;; Pool string [len:4][bytes].
+  (func $mpw_pool_string (param $out i32) (param $cap i32) (param $cur i32) (param $program i32) (param $off i32) (result i32)
+    (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur)
+      (i32.add (i32.add (local.get $program) (local.get $off)) (i32.const 4))
+      (i32.load (i32.add (local.get $program) (local.get $off)))))
+
+  ;; Pool value [len:4][hash:4][msgpack] copied raw.
+  (func $mpw_pool_value (param $out i32) (param $cap i32) (param $cur i32) (param $program i32) (param $off i32) (result i32)
+    (call $mpw_raw (local.get $out) (local.get $cap) (local.get $cur)
+      (i32.add (i32.add (local.get $program) (local.get $off)) (i32.const 8))
+      (i32.load (i32.add (local.get $program) (local.get $off)))))
+
+  ;; nth NUL-terminated entry of a table: returns address, length via
+  ;; the scratch word at tables+RENDER_TABLE_BYTES-4.
+  (func $table_entry (param $base i32) (param $n i32) (param $lenout i32) (result i32)
+    (local $p i32) (local $start i32)
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.eqz (local.get $n)))
+      (block $sd (loop $sl
+        (call $work_add (i32.const 1))
+        (br_if $sd (i32.eqz (i32.load8_u (i32.add (local.get $base) (local.get $p)))))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (br $sl)))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+      (br $l)))
+    (local.set $start (local.get $p))
+    (block $ed (loop $el
+      (call $work_add (i32.const 1))
+      (br_if $ed (i32.eqz (i32.load8_u (i32.add (local.get $base) (local.get $p)))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $el)))
+    (i32.store (local.get $lenout) (i32.sub (local.get $p) (local.get $start)))
+    (i32.add (local.get $base) (local.get $start)))
+
+  (data $render_keys
+    "instancePath\00schemaPath\00keyword\00params\00type\00allowedValue\00"
+    "allowedValues\00multipleOf\00comparison\00limit\00format\00pattern\00"
+    "missingProperty\00additionalProperty\00propertyName\00i\00j\00"
+    "passingSchemas\00minContains\00maxContains\00property\00"
+    ">=\00>\00<=\00<\00"
+    "null\00boolean\00number\00integer\00string\00array\00object\00#\00/\00")
+  (global $RENDER_KEYS_BYTES i32 (i32.const 276))
+
+  ;; Render error `index` of a finished VALIDATE-mode continuation into
+  ;; out[0..cap). Returns the byte length, -1 when cap is too small, -2 on
+  ;; a bad index. cap must exceed RENDER_TABLE_BYTES.
+  (func $render_error (export "render_error")
+    (param $program i32) (param $cont i32) (param $index i32) (param $out i32) (param $cap i32) (result i32)
+    (local $rec i32) (local $keyword i32) (local $kind i32) (local $node i32) (local $a i32) (local $b i32)
+    (local $path_base i32) (local $cur i32) (local $tables i32) (local $keys i32) (local $lenw i32)
+    (local $ptr i32) (local $n i32) (local $mask i32) (local $bits i32) (local $addr i32) (local $len i32)
+    (local $i i32) (local $count i32) (local $pcount i32) (local $kwcap i32) (local $name i32) (local $name_len i32)
+    (call $work_add (i32.const 1))
+    (if (i64.gt_u (i64.add (i64.extend_i32_u (local.get $out)) (i64.extend_i32_u (local.get $cap)))
+          (i64.shl (i64.extend_i32_u (memory.size)) (i64.const 16))) (then (return (i32.const -1))))
+    (if (i32.le_u (local.get $cap) (i32.add (global.get $RENDER_TABLE_BYTES) (i32.const 64))) (then (return (i32.const -1))))
+    (if (i32.ge_u (local.get $index) (call $ch (local.get $cont) (global.get $CH_ERROR_STORED))) (then (return (i32.const -2))))
+    ;; tables at the scratch tail: keywords, formats, render keys, len word
+    (local.set $tables (i32.add (local.get $out) (i32.sub (local.get $cap) (global.get $RENDER_TABLE_BYTES))))
+    (local.set $kwcap (i32.sub (local.get $cap) (global.get $RENDER_TABLE_BYTES)))
+    (call $work_add (call $bulk_charge (global.get $KEYWORDS_BYTES)))
+    (memory.init $keywords (local.get $tables) (i32.const 0) (global.get $KEYWORDS_BYTES))
+    (call $work_add (call $bulk_charge (global.get $FORMATS_BYTES)))
+    (memory.init $formats (i32.add (local.get $tables) (global.get $KEYWORDS_BYTES)) (i32.const 0) (global.get $FORMATS_BYTES))
+    (local.set $keys (i32.add (local.get $tables) (i32.add (global.get $KEYWORDS_BYTES) (global.get $FORMATS_BYTES))))
+    (call $work_add (call $bulk_charge (global.get $RENDER_KEYS_BYTES)))
+    (memory.init $render_keys (local.get $keys) (i32.const 0) (global.get $RENDER_KEYS_BYTES))
+    (local.set $lenw (i32.add (local.get $tables) (i32.sub (global.get $RENDER_TABLE_BYTES) (i32.const 4))))
+
+    (local.set $rec (call $error_record (local.get $cont) (local.get $index)))
+    (local.set $keyword (i32.load16_u (local.get $rec)))
+    (local.set $kind (i32.load16_u offset=2 (local.get $rec)))
+    (local.set $node (i32.load offset=4 (local.get $rec)))
+    (local.set $a (i32.load offset=16 (local.get $rec)))
+    (local.set $b (i32.load offset=20 (local.get $rec)))
+    (local.set $path_base (call $error_path_base (local.get $cont)))
+    (local.set $cap (local.get $kwcap))
+
+    (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (i32.const 0) (i32.const 4)))
+    ;; instancePath
+    (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 0) (i32.const 12)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (local.set $cur (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur)
+      (i32.add (local.get $path_base) (i32.load offset=8 (local.get $rec))) (i32.load offset=12 (local.get $rec))))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    ;; schemaPath = pointer + "/" + keyword name
+    (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 13) (i32.const 10)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (local.set $name (call $table_entry (local.get $tables) (i32.sub (local.get $keyword) (i32.const 1)) (local.get $lenw)))
+    (local.set $name_len (i32.load (local.get $lenw)))
+    (local.set $ptr (call $node_pointer_string (local.get $program) (local.get $node)))
+    (if (i32.eq (local.get $ptr) (global.get $NONE))
+      (then (local.set $addr (i32.add (local.get $keys) (i32.const 272))) (local.set $len (i32.const 1)))
+      (else
+        (local.set $addr (i32.add (i32.add (local.get $program) (local.get $ptr)) (i32.const 4)))
+        (local.set $len (i32.load (i32.add (local.get $program) (local.get $ptr))))))
+    ;; str header for len + 1 + name_len, then the three pieces
+    (local.set $n (i32.add (i32.add (local.get $len) (i32.const 1)) (local.get $name_len)))
+    (if (i32.lt_u (local.get $n) (i32.const 32))
+      (then (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.or (i32.const 0xa0) (local.get $n)))))
+      (else
+        (if (i32.lt_u (local.get $n) (i32.const 256))
+          (then
+            (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xd9)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (local.get $n))))
+          (else
+            (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xdb)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $cur (call $mpw_u32be (local.get $out) (local.get $cap) (local.get $cur) (local.get $n)))))))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (local.set $cur (call $mpw_raw (local.get $out) (local.get $cap) (local.get $cur) (local.get $addr) (local.get $len)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 47)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (local.set $cur (call $mpw_raw (local.get $out) (local.get $cap) (local.get $cur) (local.get $name) (local.get $name_len)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    ;; keyword
+    (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 24) (i32.const 7)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (local.set $cur (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur) (local.get $name) (local.get $name_len)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    ;; params
+    (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 32) (i32.const 6)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+
+    (if (i32.eq (local.get $kind) (global.get $PK_TYPE_MASK))
+      (then
+        (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 1)))
+        (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 39) (i32.const 4)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        ;; names in bit order null, boolean, number, integer, string, array,
+        ;; object; number swallows integer; joined by commas
+        (local.set $mask (local.get $a))
+        (if (i32.and (local.get $mask) (global.get $T_NUMBER))
+          (then (local.set $mask (i32.and (local.get $mask) (i32.xor (global.get $T_INTEGER) (i32.const -1))))))
+        (local.set $n (i32.popcnt (i32.and (local.get $mask) (i32.const 127))))
+        ;; total length: sum of names + (n-1) commas
+        (local.set $len (i32.const 0))
+        (local.set $i (i32.const 0))
+        (block $ld (loop $ll
+          (call $work_add (i32.const 1))
+          (br_if $ld (i32.ge_u (local.get $i) (i32.const 7)))
+          (if (i32.and (local.get $mask) (i32.shl (i32.const 1) (local.get $i)))
+            (then
+              (drop (call $table_entry (i32.add (local.get $keys) (i32.const 224)) (local.get $i) (local.get $lenw)))
+              (local.set $len (i32.add (local.get $len) (i32.load (local.get $lenw))))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $ll)))
+        (if (local.get $n) (then (local.set $len (i32.add (local.get $len) (i32.sub (local.get $n) (i32.const 1))))))
+        (if (i32.lt_u (local.get $len) (i32.const 32))
+          (then (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.or (i32.const 0xa0) (local.get $len)))))
+          (else
+            (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xd9)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (local.get $len)))))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $i (i32.const 0))
+        (local.set $count (i32.const 0))
+        (block $wd (loop $wl
+          (call $work_add (i32.const 1))
+          (br_if $wd (i32.ge_u (local.get $i) (i32.const 7)))
+          (if (i32.and (local.get $mask) (i32.shl (i32.const 1) (local.get $i)))
+            (then
+              (if (local.get $count)
+                (then
+                  (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 44)))
+                  (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))))
+              (local.set $addr (call $table_entry (i32.add (local.get $keys) (i32.const 224)) (local.get $i) (local.get $lenw)))
+              (local.set $cur (call $mpw_raw (local.get $out) (local.get $cap) (local.get $cur) (local.get $addr) (i32.load (local.get $lenw))))
+              (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+              (local.set $count (i32.add (local.get $count) (i32.const 1)))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $wl)))
+        (return (local.get $cur))))
+
+    (if (i32.eq (local.get $kind) (global.get $PK_POOL_VALUE))
+      (then
+        (if (i32.eq (local.get $keyword) (global.get $KW_CONST))
+          (then
+            (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 1)))
+            (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 44) (i32.const 12)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (return (call $mpw_pool_value (local.get $out) (local.get $cap) (local.get $cur) (local.get $program) (local.get $a)))))
+        (if (i32.eq (local.get $keyword) (global.get $KW_ENUM))
+          (then
+            (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 1)))
+            (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 57) (i32.const 13)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $count (i32.load (i32.add (local.get $program) (local.get $a))))
+            (local.set $cur (call $mpw_array (local.get $out) (local.get $cap) (local.get $cur) (local.get $count)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $i (i32.const 0))
+            (block $ed (loop $el
+              (call $work_add (i32.const 1))
+              (br_if $ed (i32.ge_u (local.get $i) (local.get $count)))
+              (local.set $cur (call $mpw_pool_value (local.get $out) (local.get $cap) (local.get $cur) (local.get $program)
+                (i32.load (i32.add (i32.add (local.get $program) (local.get $a)) (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2)))))))
+              (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $el)))
+            (return (local.get $cur))))
+        (if (i32.eq (local.get $keyword) (global.get $KW_MULTIPLE_OF))
+          (then
+            (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 1)))
+            (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 71) (i32.const 10)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (return (call $mpw_pool_value (local.get $out) (local.get $cap) (local.get $cur) (local.get $program) (local.get $a)))))
+        ;; numeric bound: comparison + limit
+        (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 2)))
+        (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 82) (i32.const 10)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (if (i32.eq (local.get $keyword) (global.get $KW_MINIMUM))
+          (then (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 214) (i32.const 2)))))
+        (if (i32.eq (local.get $keyword) (global.get $KW_EXCLUSIVE_MINIMUM))
+          (then (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 217) (i32.const 1)))))
+        (if (i32.eq (local.get $keyword) (global.get $KW_MAXIMUM))
+          (then (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 219) (i32.const 2)))))
+        (if (i32.eq (local.get $keyword) (global.get $KW_EXCLUSIVE_MAXIMUM))
+          (then (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 222) (i32.const 1)))))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 93) (i32.const 5)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (return (call $mpw_pool_value (local.get $out) (local.get $cap) (local.get $cur) (local.get $program) (local.get $a)))))
+
+    (if (i32.eq (local.get $kind) (global.get $PK_LIMIT))
+      (then
+        (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 1)))
+        (if (i32.eq (local.get $keyword) (global.get $KW_FORMAT))
+          (then
+            (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 99) (i32.const 6)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $addr (call $table_entry (i32.add (local.get $tables) (global.get $KEYWORDS_BYTES)) (i32.sub (local.get $a) (i32.const 1)) (local.get $lenw)))
+            (return (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur) (local.get $addr) (i32.load (local.get $lenw))))))
+        (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 93) (i32.const 5)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (return (call $mpw_uint (local.get $out) (local.get $cap) (local.get $cur) (local.get $a)))))
+
+    (if (i32.eq (local.get $kind) (global.get $PK_POOL_STRING))
+      (then
+        (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 1)))
+        (if (i32.eq (local.get $keyword) (global.get $KW_PATTERN))
+          (then (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 106) (i32.const 7))))
+          (else (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 114) (i32.const 15)))))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (return (call $mpw_pool_string (local.get $out) (local.get $cap) (local.get $cur) (local.get $program) (local.get $a)))))
+
+    (if (i32.eq (local.get $kind) (global.get $PK_TEXT))
+      (then
+        (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 1)))
+        (if (i32.eq (local.get $keyword) (global.get $KW_ADDITIONAL_PROPERTIES))
+          (then (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 130) (i32.const 18))))
+          (else (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 149) (i32.const 12)))))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (if (i32.eq (local.get $a) (global.get $NONE))
+          (then (return (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur) (local.get $out) (i32.const 0)))))
+        (return (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur) (i32.add (local.get $path_base) (local.get $a)) (local.get $b)))))
+
+    (if (i32.eq (local.get $kind) (global.get $PK_INDICES))
+      (then
+        (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 2)))
+        (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 162) (i32.const 1)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $cur (call $mpw_uint (local.get $out) (local.get $cap) (local.get $cur) (local.get $a)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 164) (i32.const 1)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (return (call $mpw_uint (local.get $out) (local.get $cap) (local.get $cur) (local.get $b)))))
+
+    (if (i32.eq (local.get $kind) (global.get $PK_COUNT))
+      (then
+        (if (i32.eq (local.get $keyword) (global.get $KW_ONE_OF))
+          (then
+            (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 1)))
+            (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 166) (i32.const 14)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (return (call $mpw_uint (local.get $out) (local.get $cap) (local.get $cur) (local.get $a)))))
+        (local.set $pcount (select (i32.const 1) (i32.const 2) (i32.eq (local.get $b) (global.get $NONE))))
+        (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (local.get $pcount)))
+        (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 181) (i32.const 11)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $cur (call $mpw_uint (local.get $out) (local.get $cap) (local.get $cur) (local.get $a)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (if (i32.ne (local.get $b) (global.get $NONE))
+          (then
+            (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 193) (i32.const 11)))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $cur (call $mpw_uint (local.get $out) (local.get $cap) (local.get $cur) (local.get $b)))))
+        (return (local.get $cur))))
+
+    (if (i32.eq (local.get $kind) (global.get $PK_DEPENDENCY))
+      (then
+        (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 2)))
+        (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 205) (i32.const 8)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $cur (call $mpw_pool_string (local.get $out) (local.get $cap) (local.get $cur) (local.get $program) (local.get $a)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $cur (call $mpw_key (local.get $out) (local.get $cap) (local.get $cur) (local.get $keys) (i32.const 114) (i32.const 15)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (return (call $mpw_pool_string (local.get $out) (local.get $cap) (local.get $cur) (local.get $program) (local.get $b)))))
+
+    ;; PK_NONE: empty params
+    (call $mpw_map (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0)))
+
+  ;; Exact Dragon4 intervals, not a floating-point digit approximation. Each
+  ;; private integer is [used:u32][36 little-endian u32 limbs] in a 160-byte
+  ;; slot. Five slots plus 32 digits fit in the caller's 864-byte scratch.
+  ;; Binary64 needs at most 1079 bits here (including decimal normalization).
+  (func $render_big_set (param $p i32) (param $v i64) (param $shift i32)
+    (local $word i32) (local $bits i64) (local $q i32)
+    (local.set $word (i32.shr_u (local.get $shift) (i32.const 5)))
+    (local.set $bits (i64.extend_i32_u (i32.and (local.get $shift) (i32.const 31))))
+    (local.set $q (i32.add (local.get $p) (i32.add (i32.const 4) (i32.shl (local.get $word) (i32.const 2)))))
+    (i64.store (local.get $q) (i64.shl (local.get $v) (local.get $bits)))
+    (if (i64.ne (local.get $bits) (i64.const 0))
+      (then (i32.store offset=8 (local.get $q) (i32.wrap_i64 (i64.shr_u (local.get $v) (i64.sub (i64.const 64) (local.get $bits)))))))
+    (i32.store (local.get $p) (i32.add (local.get $word) (i32.const 3)))
+    (call $render_big_trim (local.get $p))
+    (call $work_add (i32.const 1)))
+
+  (func $render_big_trim (param $p i32)
+    (local $n i32)
+    (local.set $n (i32.load (local.get $p)))
+    (block $done (loop $loop
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.le_u (local.get $n) (i32.const 1)))
+      (br_if $done (i32.load (i32.add (local.get $p) (i32.shl (local.get $n) (i32.const 2)))))
+      (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+      (br $loop)))
+    (i32.store (local.get $p) (local.get $n)))
+
+  (func $render_big_mul (param $p i32) (param $m i32)
+    (local $i i32) (local $n i32) (local $q i32) (local $v i64) (local $carry i64)
+    (local.set $n (i32.load (local.get $p)))
+    (block $done (loop $loop
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (call $work_add (i32.const 1))
+      (local.set $q (i32.add (local.get $p) (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2)))))
+      (local.set $v (i64.add (i64.mul (i64.extend_i32_u (i32.load (local.get $q))) (i64.extend_i32_u (local.get $m))) (local.get $carry)))
+      (i32.store (local.get $q) (i32.wrap_i64 (local.get $v)))
+      (local.set $carry (i64.shr_u (local.get $v) (i64.const 32)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)))
+    (if (i64.ne (local.get $carry) (i64.const 0))
+      (then
+        (i32.store (i32.add (local.get $p) (i32.add (i32.const 4) (i32.shl (local.get $n) (i32.const 2)))) (i32.wrap_i64 (local.get $carry)))
+        (i32.store (local.get $p) (i32.add (local.get $n) (i32.const 1))))))
+
+  (func $render_big_cmp (param $a i32) (param $b i32) (result i32)
+    (local $n i32) (local $x i32) (local $y i32)
+    (call $work_add (i32.const 1))
+    (local.set $n (i32.load (local.get $a)))
+    (if (i32.ne (local.get $n) (i32.load (local.get $b)))
+      (then (return (select (i32.const -1) (i32.const 1) (i32.lt_u (local.get $n) (i32.load (local.get $b)))))))
+    (block $done (loop $loop
+      (br_if $done (i32.eqz (local.get $n)))
+      (call $work_add (i32.const 1))
+      (local.set $x (i32.load (i32.add (local.get $a) (i32.shl (local.get $n) (i32.const 2)))))
+      (local.set $y (i32.load (i32.add (local.get $b) (i32.shl (local.get $n) (i32.const 2)))))
+      (if (i32.ne (local.get $x) (local.get $y))
+        (then (return (select (i32.const -1) (i32.const 1) (i32.lt_u (local.get $x) (local.get $y))))))
+      (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+      (br $loop)))
+    (i32.const 0))
+
+  ;; a >= b. Clearing trimmed limbs keeps later mixed-length additions exact.
+  (func $render_big_sub (param $a i32) (param $b i32)
+    (local $i i32) (local $n i32) (local $q i32) (local $v i64) (local $borrow i64)
+    (local.set $n (i32.load (local.get $a)))
+    (block $done (loop $loop
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (call $work_add (i32.const 1))
+      (local.set $q (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2))))
+      (local.set $v (i64.sub (i64.sub (i64.extend_i32_u (i32.load (i32.add (local.get $a) (local.get $q))))
+        (if (result i64) (i32.lt_u (local.get $i) (i32.load (local.get $b)))
+          (then (i64.extend_i32_u (i32.load (i32.add (local.get $b) (local.get $q))))) (else (i64.const 0)))) (local.get $borrow)))
+      (i32.store (i32.add (local.get $a) (local.get $q)) (i32.wrap_i64 (local.get $v)))
+      (local.set $borrow (i64.shr_u (local.get $v) (i64.const 63)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)))
+    (call $render_big_trim (local.get $a)))
+
+  (func $render_big_add (param $a i32) (param $b i32)
+    (local $i i32) (local $n i32) (local $an i32) (local $bn i32) (local $q i32) (local $v i64) (local $carry i64)
+    (local.set $an (i32.load (local.get $a))) (local.set $bn (i32.load (local.get $b)))
+    (local.set $n (select (local.get $an) (local.get $bn) (i32.gt_u (local.get $an) (local.get $bn))))
+    (block $done (loop $loop
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (call $work_add (i32.const 1))
+      (local.set $q (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2))))
+      (local.set $v (i64.add (local.get $carry) (i64.add
+        (if (result i64) (i32.lt_u (local.get $i) (local.get $an)) (then (i64.extend_i32_u (i32.load (i32.add (local.get $a) (local.get $q))))) (else (i64.const 0)))
+        (if (result i64) (i32.lt_u (local.get $i) (local.get $bn)) (then (i64.extend_i32_u (i32.load (i32.add (local.get $b) (local.get $q))))) (else (i64.const 0))))))
+      (i32.store (i32.add (local.get $a) (local.get $q)) (i32.wrap_i64 (local.get $v)))
+      (local.set $carry (i64.shr_u (local.get $v) (i64.const 32)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)))
+    (if (i64.ne (local.get $carry) (i64.const 0))
+      (then
+        (i32.store (i32.add (local.get $a) (i32.add (i32.const 4) (i32.shl (local.get $n) (i32.const 2)))) (i32.wrap_i64 (local.get $carry)))
+        (local.set $n (i32.add (local.get $n) (i32.const 1)))))
+    (i32.store (local.get $a) (local.get $n)))
+
+  ;; Exact unsigned decimal, also used after signed magnitude extraction.
+  (func $render_u64 (param $out i32) (param $cap i32) (param $cur i32) (param $v i64) (result i32)
+    (local $div i64) (local $digit i32) (local $started i32)
+    (local.set $div (i64.const 10000000000000000000))
+    (loop $loop
+      (call $work_add (i32.const 1))
+      (local.set $digit (i32.wrap_i64 (i64.div_u (local.get $v) (local.get $div))))
+      (if (i32.or (i32.or (local.get $started) (local.get $digit)) (i64.eq (local.get $div) (i64.const 1)))
+        (then
+          (local.set $started (i32.const 1))
+          (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.add (local.get $digit) (i32.const 48))))
+          (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))))
+      (local.set $v (i64.rem_u (local.get $v) (local.get $div)))
+      (local.set $div (i64.div_u (local.get $div) (i64.const 10)))
+      (br_if $loop (i64.ne (local.get $div) (i64.const 0))))
+    (local.get $cur))
+
+  ;; JS Number#toString decimal presentation: -0 is 0, fixed notation for
+  ;; 1e-6 <= |x| < 1e21, signed exponent otherwise; ties choose even digits.
+  (func $render_f64 (param $out i32) (param $cap i32) (param $cur i32) (param $x f64) (param $scratch i32) (result i32)
+    (local $r i32) (local $s i32) (local $lo i32) (local $hi i32) (local $tmp i32) (local $digits i32)
+    (local $bits i64) (local $m i64) (local $exp i32) (local $shift i32) (local $even i32)
+    (local $k i32) (local $n i32) (local $d i32) (local $low i32) (local $high i32) (local $cmp i32) (local $i i32) (local $point i32)
+    (call $work_add (i32.const 1))
+    (if (f64.eq (local.get $x) (f64.const 0))
+      (then (return (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 48)))))
+    (if (f64.lt (local.get $x) (f64.const 0))
+      (then
+        (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 45)))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+        (local.set $x (f64.neg (local.get $x)))))
+    (local.set $bits (i64.reinterpret_f64 (local.get $x)))
+    (local.set $exp (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.const 52))))
+    ;; Nonfinite values are represented in the template table, not via digits.
+    (if (i32.ge_u (local.get $exp) (i32.const 2047)) (then (return (i32.const -2))))
+    (local.set $m (i64.and (local.get $bits) (i64.const 0xfffffffffffff)))
+    (local.set $shift (i32.const -1076))
+    (if (local.get $exp)
+      (then (local.set $m (i64.or (local.get $m) (i64.const 0x10000000000000)))
+        (local.set $shift (i32.sub (local.get $exp) (i32.const 1077)))))
+    (local.set $even (i64.eqz (i64.and (local.get $m) (i64.const 1))))
+    (local.set $r (local.get $scratch)) (local.set $s (i32.add (local.get $r) (i32.const 160)))
+    (local.set $lo (i32.add (local.get $r) (i32.const 320))) (local.set $hi (i32.add (local.get $r) (i32.const 480)))
+    (local.set $tmp (i32.add (local.get $r) (i32.const 640))) (local.set $digits (i32.add (local.get $r) (i32.const 800)))
+    (call $work_zero (local.get $scratch) (i32.const 0) (i32.const 864))
+    (call $render_big_set (local.get $r) (i64.shl (local.get $m) (i64.const 2)) (select (local.get $shift) (i32.const 0) (i32.gt_s (local.get $shift) (i32.const 0))))
+    (call $render_big_set (local.get $s) (i64.const 1) (select (i32.sub (i32.const 0) (local.get $shift)) (i32.const 0) (i32.lt_s (local.get $shift) (i32.const 0))))
+    (local.set $d (select (i32.const 1) (i32.const 2) (i32.and (i64.eq (local.get $m) (i64.const 0x10000000000000)) (i32.gt_u (local.get $exp) (i32.const 1)))))
+    (call $render_big_set (local.get $lo) (i64.extend_i32_u (local.get $d)) (select (local.get $shift) (i32.const 0) (i32.gt_s (local.get $shift) (i32.const 0))))
+    (call $render_big_set (local.get $hi) (i64.const 2) (select (local.get $shift) (i32.const 0) (i32.gt_s (local.get $shift) (i32.const 0))))
+    (block $scaled_up (loop $up
+      (call $work_copy (local.get $tmp) (local.get $s) (i32.shl (i32.add (i32.load (local.get $s)) (i32.const 1)) (i32.const 2)))
+      (call $render_big_mul (local.get $tmp) (i32.const 10))
+      (br_if $scaled_up (i32.lt_s (call $render_big_cmp (local.get $r) (local.get $tmp)) (i32.const 0)))
+      (call $work_copy (local.get $s) (local.get $tmp) (i32.shl (i32.add (i32.load (local.get $tmp)) (i32.const 1)) (i32.const 2)))
+      (local.set $k (i32.add (local.get $k) (i32.const 1)))
+      (br $up)))
+    (block $scaled_down (loop $down
+      (br_if $scaled_down (i32.ge_s (call $render_big_cmp (local.get $r) (local.get $s)) (i32.const 0)))
+      (call $render_big_mul (local.get $r) (i32.const 10))
+      (call $render_big_mul (local.get $lo) (i32.const 10)) (call $render_big_mul (local.get $hi) (i32.const 10))
+      (local.set $k (i32.sub (local.get $k) (i32.const 1)))
+      (br $down)))
+    (block $shortest (loop $digit
+      (local.set $d (i32.const 0))
+      (block $divided (loop $divide
+        (br_if $divided (i32.lt_s (call $render_big_cmp (local.get $r) (local.get $s)) (i32.const 0)))
+        (call $render_big_sub (local.get $r) (local.get $s))
+        (local.set $d (i32.add (local.get $d) (i32.const 1))) (br $divide)))
+      (local.set $cmp (call $render_big_cmp (local.get $r) (local.get $lo)))
+      (local.set $low (i32.or (i32.lt_s (local.get $cmp) (i32.const 0)) (i32.and (i32.eqz (local.get $cmp)) (local.get $even))))
+      (call $work_copy (local.get $tmp) (local.get $r) (i32.shl (i32.add (i32.load (local.get $r)) (i32.const 1)) (i32.const 2)))
+      (call $render_big_add (local.get $tmp) (local.get $hi))
+      (local.set $cmp (call $render_big_cmp (local.get $tmp) (local.get $s)))
+      (local.set $high (i32.or (i32.gt_s (local.get $cmp) (i32.const 0)) (i32.and (i32.eqz (local.get $cmp)) (local.get $even))))
+      (i32.store8 (i32.add (local.get $digits) (local.get $n)) (i32.add (local.get $d) (i32.const 48)))
+      (local.set $n (i32.add (local.get $n) (i32.const 1)))
+      (if (i32.or (local.get $low) (local.get $high))
+        (then
+          (call $render_big_mul (local.get $r) (i32.const 2))
+          (local.set $cmp (call $render_big_cmp (local.get $r) (local.get $s)))
+          (if (i32.and (local.get $high) (i32.or (i32.eqz (local.get $low))
+                (i32.or (i32.gt_s (local.get $cmp) (i32.const 0)) (i32.and (i32.eqz (local.get $cmp)) (i32.and (local.get $d) (i32.const 1))))))
+            (then
+              (local.set $i (local.get $n))
+              (block $rounded (loop $carry
+                (call $work_add (i32.const 1))
+                (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+                (local.set $d (i32.add (i32.load8_u (i32.add (local.get $digits) (local.get $i))) (i32.const 1)))
+                (if (i32.lt_u (local.get $d) (i32.const 58))
+                  (then (i32.store8 (i32.add (local.get $digits) (local.get $i)) (local.get $d)) (br $rounded)))
+                (i32.store8 (i32.add (local.get $digits) (local.get $i)) (i32.const 48))
+                (if (i32.eqz (local.get $i))
+                  (then (i32.store8 (local.get $digits) (i32.const 49))
+                    (local.set $k (i32.add (local.get $k) (i32.const 1))) (br $rounded)))
+                (br $carry)))))
+          (br $shortest)))
+      (call $render_big_mul (local.get $r) (i32.const 10))
+      (call $render_big_mul (local.get $lo) (i32.const 10)) (call $render_big_mul (local.get $hi) (i32.const 10))
+      (br $digit)))
+    ;; Rounding can leave trailing zeroes; omit them from the significand.
+    (block $trimmed (loop $trim
+      (call $work_add (i32.const 1))
+      (br_if $trimmed (i32.le_u (local.get $n) (i32.const 1)))
+      (br_if $trimmed (i32.ne (i32.load8_u (i32.add (local.get $digits) (i32.sub (local.get $n) (i32.const 1)))) (i32.const 48)))
+      (local.set $n (i32.sub (local.get $n) (i32.const 1))) (br $trim)))
+    (local.set $point (i32.add (local.get $k) (i32.const 1)))
+    (if (i32.and (i32.ge_s (local.get $k) (i32.const -6)) (i32.lt_s (local.get $k) (i32.const 21)))
+      (then
+        (local.set $i (select (local.get $point) (i32.const 0) (i32.lt_s (local.get $point) (i32.const 0))))
+        (if (i32.le_s (local.get $point) (i32.const 0))
+          (then (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 48)))
+            (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 46)))))
+        (block $fixed (loop $write
+          (call $work_add (i32.const 1))
+          (br_if $fixed (i32.and (i32.ge_s (local.get $i) (local.get $n)) (i32.ge_s (local.get $i) (local.get $point))))
+          (if (i32.and (i32.eq (local.get $i) (local.get $point)) (i32.gt_s (local.get $i) (i32.const 0)))
+            (then (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 46)))))
+          (local.set $d (i32.const 48))
+          (if (i32.lt_u (local.get $i) (local.get $n)) (then (local.set $d (i32.load8_u (i32.add (local.get $digits) (local.get $i))))))
+          (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (local.get $d)))
+          (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $write)))
+        (return (local.get $cur))))
+    (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.load8_u (local.get $digits))))
+    (if (i32.gt_u (local.get $n) (i32.const 1))
+      (then (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 46)))
+        (local.set $cur (call $mpw_raw (local.get $out) (local.get $cap) (local.get $cur) (i32.add (local.get $digits) (i32.const 1)) (i32.sub (local.get $n) (i32.const 1))))))
+    (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 101)))
+    (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (select (i32.const 45) (i32.const 43) (i32.lt_s (local.get $k) (i32.const 0)))))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (call $render_u64 (local.get $out) (local.get $cap) (local.get $cur)
+      (i64.extend_i32_u (select (i32.sub (i32.const 0) (local.get $k)) (local.get $k) (i32.lt_s (local.get $k) (i32.const 0))))))
+
+  ;; Shared Number#toString text for diagnostics and external native-value
+  ;; consumers. Nonfinite spellings remain in the existing message data.
+  (func $render_number_text (param $out i32) (param $cap i32) (param $cur i32)
+    (param $x f64) (param $scratch i32) (result i32)
+    (local $offset i32) (local $length i32)
+    (if (f64.ne (local.get $x) (local.get $x))
+      (then (local.set $offset (i32.const 1273)) (local.set $length (i32.const 3)))
+      (else
+        (if (f64.eq (f64.abs (local.get $x)) (f64.const inf))
+          (then
+            (local.set $offset (select (i32.const 1286) (i32.const 1277) (f64.lt (local.get $x) (f64.const 0))))
+            (local.set $length (select (i32.const 9) (i32.const 8) (f64.lt (local.get $x) (f64.const 0)))))
+          (else (return (call $render_f64 (local.get $out) (local.get $cap) (local.get $cur) (local.get $x) (local.get $scratch)))))))
+    ;; Same source charge and capacity precedence as mpw_raw.
+    (call $work_add (i32.const 1))
+    (if (i32.or (i32.gt_u (local.get $cur) (local.get $cap))
+          (i32.gt_u (local.get $length) (i32.sub (local.get $cap) (local.get $cur))))
+      (then (return (i32.const -1))))
+    (call $work_add (call $bulk_charge (local.get $length)))
+    (memory.init $render_messages (i32.add (local.get $out) (local.get $cur)) (local.get $offset) (local.get $length))
+    (i32.add (local.get $cur) (local.get $length)))
+
+  ;; Checked atomic primitive; owns no memory and invokes no host function.
+  ;; A complete output reservation avoids exposing partial numeric strings.
+  (func $format_number (export "format_number")
+    (param $value f64) (param $out i32) (param $cap i32)
+    (param $scratch i32) (param $scratch_cap i32)
+    (result i32 i32 i64 i32)
+    (local $length i32)
+    (if (i32.eqz (i32.and
+          (i32.and (call $direct_span (local.get $out) (local.get $cap) (i32.const 0))
+            (call $direct_span (local.get $scratch) (local.get $scratch_cap) (i32.const 1)))
+          (call $direct_disjoint (local.get $out) (local.get $cap) (local.get $scratch) (local.get $scratch_cap))))
+      (then (return (i32.const 12) (i32.const 0) (i64.const 0) (i32.const 0))))
+    (if (i32.or (i32.lt_u (local.get $cap) (i32.const 32))
+          (i32.lt_u (local.get $scratch_cap) (i32.const 864)))
+      (then (return (i32.const 7) (i32.const 0) (i64.const 0) (i32.const 0))))
+    (call $work_begin (i32.const 0) (i32.const 1))
+    (local.set $length (call $render_number_text (local.get $out) (local.get $cap) (i32.const 0) (local.get $value) (local.get $scratch)))
+    (global.set $work_active (i32.const 0))
+    (i32.const 0) (local.get $length) (global.get $work_total) (global.get $work_overflow))
+
+  ;; StringNumericLiteral is not parseFloat's prefix grammar, nor JSON's
+  ;; restricted decimal grammar. Reuse the renderer's exact integers and the
+  ;; JSON converter's exact power-of-ten fast path. Difficult decimals are
+  ;; located by exact binary64 rounding boundaries, never accepted from an
+  ;; approximate accumulator. Two existing 160-byte integer slots suffice:
+  ;; every boundary is an odd integer times a power of two, at most 1075 bits.
+  (func $number_u16 (param $p i32) (result i32)
+    (call $work_add (i32.const 1))
+    (i32.load16_u align=1 (local.get $p)))
+
+  (func $number_space (param $c i32) (result i32)
+    (i32.or
+      (i32.or (i32.and (i32.ge_u (local.get $c) (i32.const 9)) (i32.le_u (local.get $c) (i32.const 13)))
+        (i32.or (i32.eq (local.get $c) (i32.const 32)) (i32.eq (local.get $c) (i32.const 160))))
+      (i32.or
+        (i32.or (i32.eq (local.get $c) (i32.const 0x1680))
+          (i32.and (i32.ge_u (local.get $c) (i32.const 0x2000)) (i32.le_u (local.get $c) (i32.const 0x200a))))
+        (i32.or
+          (i32.or (i32.eq (local.get $c) (i32.const 0x2028)) (i32.eq (local.get $c) (i32.const 0x2029)))
+          (i32.or (i32.eq (local.get $c) (i32.const 0x202f))
+            (i32.or (i32.eq (local.get $c) (i32.const 0x205f))
+              (i32.or (i32.eq (local.get $c) (i32.const 0x3000)) (i32.eq (local.get $c) (i32.const 0xfeff)))))))))
+
+  ;; True iff the positive decimal rounds to this float or a smaller one.
+  ;; The upper boundary of float M*2^E is (2*M+1)*2^(E-1), including
+  ;; subnormals, zero, and the finite/Infinity boundary. Equality chooses even.
+  (func $number_below_boundary (param $bits i64) (param $first i32) (param $end i32)
+    (param $last i32) (param $exponent i32) (param $scratch i32) (result i32)
+    (local $r i32) (local $s i32) (local $e i32) (local $m i64)
+    (local $k i32) (local $p i32) (local $c i32) (local $digit i32)
+    (if (i64.ge_u (local.get $bits) (i64.const 0x7ff0000000000000)) (then (return (i32.const 1))))
+    (local.set $r (local.get $scratch)) (local.set $s (i32.add (local.get $scratch) (i32.const 160)))
+    (memory.fill (local.get $scratch) (i32.const 0) (i32.const 320))
+    (call $work_add (call $bulk_charge (i32.const 320)))
+    (local.set $e (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.const 52))))
+    (local.set $m (i64.and (local.get $bits) (i64.const 0x000fffffffffffff)))
+    (if (local.get $e) (then (local.set $m (i64.or (local.get $m) (i64.const 0x0010000000000000)))))
+    (local.set $m (i64.or (i64.shl (local.get $m) (i64.const 1)) (i64.const 1)))
+    (local.set $e (select (i32.sub (local.get $e) (i32.const 1076)) (i32.const -1075) (local.get $e)))
+    (call $render_big_set (local.get $r) (local.get $m) (select (local.get $e) (i32.const 0) (i32.gt_s (local.get $e) (i32.const 0))))
+    (call $render_big_set (local.get $s) (i64.const 1) (select (i32.sub (i32.const 0) (local.get $e)) (i32.const 0) (i32.lt_s (local.get $e) (i32.const 0))))
+    ;; Normalize R/S to [0.1,1). No power-of-five expansion or unbounded bigint.
+    (block $up_done (loop $up
+      (br_if $up_done (i32.ge_s (call $render_big_cmp (local.get $r) (local.get $s)) (i32.const 0)))
+      (call $render_big_mul (local.get $r) (i32.const 10))
+      (local.set $k (i32.sub (local.get $k) (i32.const 1))) (br $up)))
+    (block $down_done (loop $down
+      (br_if $down_done (i32.lt_s (call $render_big_cmp (local.get $r) (local.get $s)) (i32.const 0)))
+      (call $render_big_mul (local.get $s) (i32.const 10))
+      (local.set $k (i32.add (local.get $k) (i32.const 1))) (br $down)))
+    (local.set $k (i32.sub (local.get $k) (i32.const 1)))
+    (if (i32.ne (local.get $exponent) (local.get $k))
+      (then (return (i32.lt_s (local.get $exponent) (local.get $k)))))
+    (local.set $p (local.get $first))
+    (block $done (loop $digits
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $c (call $number_u16 (local.get $p)))
+      (local.set $p (i32.add (local.get $p) (i32.const 2)))
+      (br_if $digits (i32.eq (local.get $c) (i32.const 46)))
+      (call $render_big_mul (local.get $r) (i32.const 10))
+      (local.set $digit (i32.const 0))
+      (block $digit_done (loop $divide
+        (br_if $digit_done (i32.lt_s (call $render_big_cmp (local.get $r) (local.get $s)) (i32.const 0)))
+        (call $render_big_sub (local.get $r) (local.get $s))
+        (local.set $digit (i32.add (local.get $digit) (i32.const 1))) (br $divide)))
+      (local.set $c (i32.sub (local.get $c) (i32.const 48)))
+      (if (i32.ne (local.get $c) (local.get $digit)) (then (return (i32.lt_u (local.get $c) (local.get $digit)))))
+      (if (i32.and (i32.eq (i32.load (local.get $r)) (i32.const 1)) (i32.eqz (i32.load offset=4 (local.get $r))))
+        (then
+          ;; A cached final nonzero input digit avoids rescanning huge zero tails.
+          (return (i32.and (i32.lt_u (local.get $last) (local.get $p))
+            (i64.eqz (i64.and (local.get $bits) (i64.const 1)))))))
+      (br $digits)))
+    ;; Input has ended while the exact boundary still has a positive remainder.
+    (i32.const 1))
+
+  (func $number_decimal (param $mant i64) (param $digits i32) (param $exponent i32)
+    (param $first i32) (param $end i32) (param $last i32) (param $scratch i32) (result f64)
+    (local $scale i32) (local $v f64) (local $bits i64) (local $lo i64)
+    (local $hi i64) (local $at i64) (local $step i64)
+    (local.set $scale (i32.add (i32.sub (local.get $exponent)
+      (select (local.get $digits) (i32.const 19) (i32.lt_u (local.get $digits) (i32.const 19)))) (i32.const 1)))
+    (local.set $v (f64.convert_i64_u (local.get $mant)))
+    (if (i32.and (i32.le_u (local.get $digits) (i32.const 19)) (i32.eqz (local.get $scale)))
+      (then (return (local.get $v))))
+    (if (i32.and (i32.le_u (local.get $digits) (i32.const 15))
+          (i32.and (i32.ge_s (local.get $scale) (i32.const -22)) (i32.le_s (local.get $scale) (i32.const 22))))
+      (then
+        (call $work_add (select (local.get $scale) (i32.sub (i32.const 0) (local.get $scale)) (i32.ge_s (local.get $scale) (i32.const 0))))
+        (return (if (result f64) (i32.ge_s (local.get $scale) (i32.const 0))
+          (then (f64.mul (local.get $v) (call $tj_pow10 (local.get $scale))))
+          (else (f64.div (local.get $v) (call $tj_pow10 (i32.sub (i32.const 0) (local.get $scale)))))))))
+    ;; Only a search hint. Exact midpoint comparisons authorize every result.
+    (block $scaled (loop $scale_loop
+      (br_if $scaled (i32.eqz (local.get $scale)))
+      (call $work_add (i32.const 1))
+      (if (i32.gt_s (local.get $scale) (i32.const 0))
+        (then (local.set $v (f64.mul (local.get $v) (f64.const 10))) (local.set $scale (i32.sub (local.get $scale) (i32.const 1))))
+        (else (local.set $v (f64.div (local.get $v) (f64.const 10))) (local.set $scale (i32.add (local.get $scale) (i32.const 1)))))
+      (br $scale_loop)))
+    (local.set $bits (i64.reinterpret_f64 (local.get $v)))
+    (if (i64.ge_u (local.get $bits) (i64.const 0x7ff0000000000000))
+      (then (local.set $bits (i64.const 0x7fefffffffffffff))))
+    (local.set $step (i64.const 1))
+    (if (call $number_below_boundary (local.get $bits) (local.get $first) (local.get $end) (local.get $last) (local.get $exponent) (local.get $scratch))
+      (then
+        (local.set $hi (local.get $bits))
+        (block $bracketed (loop $lower
+          (if (i64.eqz (local.get $hi)) (then (return (f64.const 0))))
+          (local.set $at (select (i64.sub (local.get $bits) (local.get $step)) (i64.const 0) (i64.gt_u (local.get $bits) (local.get $step))))
+          (if (i32.eqz (call $number_below_boundary (local.get $at) (local.get $first) (local.get $end) (local.get $last) (local.get $exponent) (local.get $scratch)))
+            (then (local.set $lo (i64.add (local.get $at) (i64.const 1))) (br $bracketed)))
+          (local.set $hi (local.get $at)) (local.set $step (i64.shl (local.get $step) (i64.const 1))) (br $lower))))
+      (else
+        (local.set $lo (i64.add (local.get $bits) (i64.const 1)))
+        (block $bracketed (loop $upper
+          (local.set $at (select (i64.add (local.get $bits) (local.get $step)) (i64.const 0x7ff0000000000000)
+            (i64.lt_u (local.get $step) (i64.sub (i64.const 0x7ff0000000000000) (local.get $bits)))))
+          (if (call $number_below_boundary (local.get $at) (local.get $first) (local.get $end) (local.get $last) (local.get $exponent) (local.get $scratch))
+            (then (local.set $hi (local.get $at)) (br $bracketed)))
+          (local.set $lo (i64.add (local.get $at) (i64.const 1)))
+          (local.set $step (i64.shl (local.get $step) (i64.const 1))) (br $upper)))))
+    (block $found (loop $search
+      (br_if $found (i64.ge_u (local.get $lo) (local.get $hi)))
+      (local.set $at (i64.add (local.get $lo) (i64.shr_u (i64.sub (local.get $hi) (local.get $lo)) (i64.const 1))))
+      (if (call $number_below_boundary (local.get $at) (local.get $first) (local.get $end) (local.get $last) (local.get $exponent) (local.get $scratch))
+        (then (local.set $hi (local.get $at))) (else (local.set $lo (i64.add (local.get $at) (i64.const 1)))))
+      (br $search)))
+    (f64.reinterpret_i64 (local.get $lo)))
+
+  ;; Radices 2/8/16 need only the leading 54 bits and a sticky bit. Accumulating
+  ;; in f64 would double-round long integers. The entire spelling is validated.
+  (func $number_radix (param $p i32) (param $end i32) (param $width i32) (result f64)
+    (local $c i32) (local $d i32) (local $j i32) (local $bit i32)
+    (local $bits i32) (local $sticky i32) (local $mant i64)
+    (if (i32.eq (local.get $p) (local.get $end)) (then (return (f64.const nan))))
+    (block $done (loop $digits
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $c (call $number_u16 (local.get $p)))
+      (local.set $d (call $hex_value (local.get $c)))
+      (if (i32.ge_u (local.get $d) (i32.shl (i32.const 1) (local.get $width))) (then (return (f64.const nan))))
+      (local.set $j (local.get $width))
+      (block $word_done (loop $word
+        (br_if $word_done (i32.eqz (local.get $j)))
+        (local.set $j (i32.sub (local.get $j) (i32.const 1)))
+        (local.set $bit (i32.and (i32.shr_u (local.get $d) (local.get $j)) (i32.const 1)))
+        (if (i32.or (local.get $bits) (local.get $bit))
+          (then
+            (if (i32.lt_u (local.get $bits) (i32.const 54))
+              (then (local.set $mant (i64.or (i64.shl (local.get $mant) (i64.const 1)) (i64.extend_i32_u (local.get $bit)))))
+              (else (local.set $sticky (i32.or (local.get $sticky) (local.get $bit)))))
+            (if (i32.lt_u (local.get $bits) (i32.const 1025)) (then (local.set $bits (i32.add (local.get $bits) (i32.const 1)))))))
+        (call $work_add (i32.const 1)) (br $word)))
+      (local.set $p (i32.add (local.get $p) (i32.const 2))) (br $digits)))
+    (if (i32.gt_u (local.get $bits) (i32.const 1024)) (then (return (f64.const inf))))
+    (if (i32.le_u (local.get $bits) (i32.const 53)) (then (return (f64.convert_i64_u (local.get $mant)))))
+    (local.set $bit (i32.wrap_i64 (i64.and (local.get $mant) (i64.const 1))))
+    (local.set $mant (i64.shr_u (local.get $mant) (i64.const 1)))
+    (if (i32.and (local.get $bit) (i32.or (local.get $sticky) (i32.wrap_i64 (i64.and (local.get $mant) (i64.const 1)))))
+      (then (local.set $mant (i64.add (local.get $mant) (i64.const 1)))))
+    (f64.mul (f64.convert_i64_u (local.get $mant))
+      (f64.reinterpret_i64 (i64.shl (i64.extend_i32_u (i32.add (local.get $bits) (i32.const 970))) (i64.const 52)))))
+
+  (func $number_parse_utf16 (param $p i32) (param $end i32) (param $scratch i32) (result f64)
+    (local $c i32) (local $neg i32) (local $signed i32) (local $dot i32) (local $any i32)
+    (local $digits i32) (local $fraction i32) (local $first i32) (local $last i32) (local $mant_end i32)
+    (local $mant i64) (local $exp i64) (local $exp_neg i32) (local $exp_digits i32) (local $v f64)
+    (block $leading_done (loop $leading
+      (br_if $leading_done (i32.ge_u (local.get $p) (local.get $end)))
+      (br_if $leading_done (i32.eqz (call $number_space (call $number_u16 (local.get $p)))))
+      (local.set $p (i32.add (local.get $p) (i32.const 2))) (br $leading)))
+    (block $trailing_done (loop $trailing
+      (br_if $trailing_done (i32.ge_u (local.get $p) (local.get $end)))
+      (br_if $trailing_done (i32.eqz (call $number_space (call $number_u16 (i32.sub (local.get $end) (i32.const 2))))))
+      (local.set $end (i32.sub (local.get $end) (i32.const 2))) (br $trailing)))
+    (if (i32.eq (local.get $p) (local.get $end)) (then (return (f64.const 0))))
+    (local.set $c (call $number_u16 (local.get $p)))
+    (if (i32.or (i32.eq (local.get $c) (i32.const 43)) (i32.eq (local.get $c) (i32.const 45)))
+      (then
+        (local.set $signed (i32.const 1)) (local.set $neg (i32.eq (local.get $c) (i32.const 45)))
+        (local.set $p (i32.add (local.get $p) (i32.const 2)))
+        (if (i32.eq (local.get $p) (local.get $end)) (then (return (f64.const nan))))))
+    (if (i32.eq (i32.sub (local.get $end) (local.get $p)) (i32.const 16))
+      (then
+        (call $work_add (i32.const 8))
+        (if (i32.and (i64.eq (i64.load align=1 (local.get $p)) (i64.const 0x00690066006e0049))
+              (i64.eq (i64.load offset=8 align=1 (local.get $p)) (i64.const 0x007900740069006e)))
+          (then (return (select (f64.const -inf) (f64.const inf) (local.get $neg)))))))
+    (if (i32.ge_u (i32.sub (local.get $end) (local.get $p)) (i32.const 4))
+      (then
+        (if (i32.eq (call $number_u16 (local.get $p)) (i32.const 48))
+          (then
+            (local.set $c (i32.or (call $number_u16 (i32.add (local.get $p) (i32.const 2))) (i32.const 32)))
+            (if (i32.or (i32.eq (local.get $c) (i32.const 120))
+                  (i32.or (i32.eq (local.get $c) (i32.const 111)) (i32.eq (local.get $c) (i32.const 98))))
+              (then
+                (if (local.get $signed) (then (return (f64.const nan))))
+                (return (call $number_radix (i32.add (local.get $p) (i32.const 4)) (local.get $end)
+                  (select (i32.const 4) (select (i32.const 3) (i32.const 1) (i32.eq (local.get $c) (i32.const 111))) (i32.eq (local.get $c) (i32.const 120)))))))))))
+    (block $mantissa_done (loop $mantissa
+      (br_if $mantissa_done (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $c (call $number_u16 (local.get $p)))
+      (if (i32.and (i32.ge_u (local.get $c) (i32.const 48)) (i32.le_u (local.get $c) (i32.const 57)))
+        (then
+          (local.set $any (i32.const 1))
+          (local.set $fraction (i32.add (local.get $fraction) (local.get $dot)))
+          (if (i32.or (local.get $digits) (i32.ne (local.get $c) (i32.const 48)))
+            (then
+              (if (i32.eqz (local.get $digits)) (then (local.set $first (local.get $p))))
+              (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+              (if (i32.ne (local.get $c) (i32.const 48)) (then (local.set $last (local.get $p))))
+              (if (i32.le_u (local.get $digits) (i32.const 19))
+                (then (local.set $mant (i64.add (i64.mul (local.get $mant) (i64.const 10)) (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48)))))))))
+          (local.set $p (i32.add (local.get $p) (i32.const 2))) (br $mantissa)))
+      (if (i32.and (i32.eq (local.get $c) (i32.const 46)) (i32.eqz (local.get $dot)))
+        (then (local.set $dot (i32.const 1)) (local.set $p (i32.add (local.get $p) (i32.const 2))) (br $mantissa)))
+      (br $mantissa_done)))
+    (if (i32.eqz (local.get $any)) (then (return (f64.const nan))))
+    (local.set $mant_end (local.get $p))
+    (if (i32.lt_u (local.get $p) (local.get $end))
+      (then
+        (if (i32.ne (i32.or (local.get $c) (i32.const 32)) (i32.const 101)) (then (return (f64.const nan))))
+        (local.set $p (i32.add (local.get $p) (i32.const 2)))
+        (if (i32.lt_u (local.get $p) (local.get $end))
+          (then
+            (local.set $c (call $number_u16 (local.get $p)))
+            (if (i32.or (i32.eq (local.get $c) (i32.const 43)) (i32.eq (local.get $c) (i32.const 45)))
+              (then (local.set $exp_neg (i32.eq (local.get $c) (i32.const 45))) (local.set $p (i32.add (local.get $p) (i32.const 2)))))))
+        (block $exponent_done (loop $exponent
+          (br_if $exponent_done (i32.ge_u (local.get $p) (local.get $end)))
+          (local.set $c (call $number_u16 (local.get $p)))
+          (if (i32.or (i32.lt_u (local.get $c) (i32.const 48)) (i32.gt_u (local.get $c) (i32.const 57))) (then (return (f64.const nan))))
+          (local.set $exp_digits (i32.const 1))
+          (if (i64.lt_u (local.get $exp) (i64.const 4294967296))
+            (then
+              (local.set $exp (i64.add (i64.mul (local.get $exp) (i64.const 10)) (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48)))))
+              (if (i64.gt_u (local.get $exp) (i64.const 4294967296)) (then (local.set $exp (i64.const 4294967296))))))
+          (local.set $p (i32.add (local.get $p) (i32.const 2))) (br $exponent)))
+        (if (i32.eqz (local.get $exp_digits)) (then (return (f64.const nan))))
+        (if (local.get $exp_neg) (then (local.set $exp (i64.sub (i64.const 0) (local.get $exp)))))))
+    (if (local.get $digits)
+      (then
+        (local.set $exp (i64.sub (i64.add (local.get $exp) (i64.extend_i32_u (local.get $digits)))
+          (i64.add (i64.extend_i32_u (local.get $fraction)) (i64.const 1))))
+        (if (i64.gt_s (local.get $exp) (i64.const 308)) (then (local.set $v (f64.const inf)))
+          (else (if (i64.ge_s (local.get $exp) (i64.const -324))
+            (then (local.set $v (call $number_decimal (local.get $mant) (local.get $digits) (i32.wrap_i64 (local.get $exp))
+              (local.get $first) (local.get $mant_end) (local.get $last) (local.get $scratch)))))))))
+    (if (result f64) (local.get $neg) (then (f64.neg (local.get $v))) (else (local.get $v))))
+
+  (func $parse_number_utf16 (export "parse_number_utf16")
+    (param $input i32) (param $bytes i32) (param $scratch i32) (param $scratch_cap i32)
+    (result i32 f64 i64 i32)
+    (local $value f64)
+    (if (i32.or (i32.and (local.get $bytes) (i32.const 1))
+          (i32.eqz (i32.and
+            (i32.and (call $direct_span (local.get $input) (local.get $bytes) (i32.const 0))
+              (call $direct_span (local.get $scratch) (local.get $scratch_cap) (i32.const 1)))
+            (call $direct_disjoint (local.get $input) (local.get $bytes) (local.get $scratch) (local.get $scratch_cap)))))
+      (then (return (i32.const 12) (f64.const nan) (i64.const 0) (i32.const 0))))
+    (if (i32.lt_u (local.get $scratch_cap) (i32.const 320))
+      (then (return (i32.const 7) (f64.const nan) (i64.const 0) (i32.const 0))))
+    (call $work_begin (i32.const 0) (i32.const 1))
+    (local.set $value (call $number_parse_utf16 (local.get $input) (i32.add (local.get $input) (local.get $bytes)) (local.get $scratch)))
+    (global.set $work_active (i32.const 0))
+    (i32.const 0) (local.get $value) (global.get $work_total) (global.get $work_overflow))
+
+  ;; Base sixteen is an exact binary64 bit window, not the interpreter's
+  ;; fraction-capped general-radix approximation. Preserve all subnormal digits.
+  (func $number_hex_text (param $value f64) (param $out i32) (result i32)
+    (local $bits i64) (local $mant i64) (local $power i32)
+    (local $top i32) (local $bottom i32) (local $shift i32) (local $digit i32) (local $n i32)
+    (if (i32.or (f64.ne (local.get $value) (local.get $value)) (f64.eq (f64.abs (local.get $value)) (f64.const inf)))
+      (then (return (call $render_number_text (local.get $out) (i32.const 320) (i32.const 0) (local.get $value) (i32.const 0)))))
+    (if (f64.eq (local.get $value) (f64.const 0))
+      (then (i32.store8 (local.get $out) (i32.const 48)) (call $work_add (i32.const 1)) (return (i32.const 1))))
+    (if (f64.lt (local.get $value) (f64.const 0))
+      (then (i32.store8 (local.get $out) (i32.const 45)) (local.set $n (i32.const 1)) (call $work_add (i32.const 1))))
+    (local.set $bits (i64.reinterpret_f64 (f64.abs (local.get $value))))
+    (local.set $power (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.const 52))))
+    (local.set $mant (i64.and (local.get $bits) (i64.const 0x000fffffffffffff)))
+    (if (local.get $power) (then (local.set $mant (i64.or (local.get $mant) (i64.const 0x0010000000000000)))))
+    (local.set $power (select (i32.sub (local.get $power) (i32.const 1075)) (i32.const -1074) (local.get $power)))
+    (local.set $top (i32.shr_s (i32.add (local.get $power) (i32.sub (i32.const 63) (i32.wrap_i64 (i64.clz (local.get $mant))))) (i32.const 2)))
+    (local.set $bottom (i32.shr_s (i32.add (local.get $power) (i32.wrap_i64 (i64.ctz (local.get $mant)))) (i32.const 2)))
+    (if (i32.lt_s (local.get $top) (i32.const 0)) (then (local.set $top (i32.const 0))))
+    (if (i32.gt_s (local.get $bottom) (i32.const 0)) (then (local.set $bottom (i32.const 0))))
+    (block $done (loop $digits
+      (br_if $done (i32.lt_s (local.get $top) (local.get $bottom)))
+      (if (i32.eq (local.get $top) (i32.const -1))
+        (then
+          (i32.store8 (i32.add (local.get $out) (local.get $n)) (i32.const 46))
+          (local.set $n (i32.add (local.get $n) (i32.const 1))) (call $work_add (i32.const 1))))
+      (local.set $shift (i32.sub (i32.mul (local.get $top) (i32.const 4)) (local.get $power)))
+      (local.set $digit (i32.const 0))
+      (if (i32.ge_s (local.get $shift) (i32.const 0))
+        (then
+          (if (i32.lt_u (local.get $shift) (i32.const 64))
+            (then (local.set $digit (i32.and (i32.wrap_i64 (i64.shr_u (local.get $mant) (i64.extend_i32_u (local.get $shift)))) (i32.const 15))))))
+        (else
+          (if (i32.gt_s (local.get $shift) (i32.const -64))
+            (then (local.set $digit (i32.and (i32.wrap_i64 (i64.shl (local.get $mant) (i64.extend_i32_u (i32.sub (i32.const 0) (local.get $shift))))) (i32.const 15)))))))
+      (i32.store8 (i32.add (local.get $out) (local.get $n))
+        (i32.add (local.get $digit) (select (i32.const 48) (i32.const 87) (i32.lt_u (local.get $digit) (i32.const 10)))))
+      (local.set $n (i32.add (local.get $n) (i32.const 1))) (call $work_add (i32.const 1))
+      (local.set $top (i32.sub (local.get $top) (i32.const 1))) (br $digits)))
+    (local.get $n))
+
+  (func $format_number_hex (export "format_number_hex")
+    (param $value f64) (param $out i32) (param $cap i32) (result i32 i32 i64 i32)
+    (local $length i32)
+    (if (i32.eqz (call $direct_span (local.get $out) (local.get $cap) (i32.const 0)))
+      (then (return (i32.const 12) (i32.const 0) (i64.const 0) (i32.const 0))))
+    (if (i32.lt_u (local.get $cap) (i32.const 320))
+      (then (return (i32.const 7) (i32.const 0) (i64.const 0) (i32.const 0))))
+    (call $work_begin (i32.const 0) (i32.const 1))
+    (local.set $length (call $number_hex_text (local.get $value) (local.get $out)))
+    (global.set $work_active (i32.const 0))
+    (i32.const 0) (local.get $length) (global.get $work_total) (global.get $work_overflow))
+
+  ;; The sole message catalogue. Tokens 1..2 name a raw params key; token 3
+  ;; substitutes the raw keyword. Missing params stringify as undefined,
+  ;; including failingKeyword for an if record without that parameter.
+  (data $render_messages
+    ;; u16 offsets by keyword code (0..64); strings begin at byte 160.
+    "\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\c1\00\d0\00"
+    "\ea\00\15\01\36\01\36\01\36\01\36\01\53\01\7e\01\aa\01\c9\01\e6\01\0c\02\33\02\76\02\a7\02\d9\02"
+    "\04\03\30\03\60\03\a0\00\a9\03\c6\03\ed\03\ff\03\a0\00\a0\00\a0\00\a0\00\24\04\48\04\a0\00\60\03"
+    "\a0\00\a0\00\a0\00\64\04\8a\04\af\04\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00\a0\00"
+    "\cf\04\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00"
+    "must pass \22\03\22 keyword validation\00" ;; 160
+    "must be \01type\02\00" ;; 193
+    "must be equal to constant\00" ;; 208
+    "must be equal to one of the allowed values\00" ;; 234
+    "must be multiple of \01multipleOf\02\00" ;; 277
+    "must be \01comparison\02 \01limit\02\00" ;; 310
+    "must NOT have more than \01limit\02 characters\00" ;; 339
+    "must NOT have fewer than \01limit\02 characters\00" ;; 382
+    "must match pattern \22\01pattern\02\22\00" ;; 426
+    "must match format \22\01format\02\22\00" ;; 457
+    "must NOT have more than \01limit\02 items\00" ;; 486
+    "must NOT have fewer than \01limit\02 items\00" ;; 524
+    "must NOT have duplicate items (items ## \01j\02 and \01i\02 are identical)\00" ;; 563
+    "must contain at most \01maxContains\02 valid item(s)\00" ;; 630
+    "must contain at least \01minContains\02 valid item(s)\00" ;; 679
+    "must NOT have more than \01limit\02 properties\00" ;; 729
+    "must NOT have fewer than \01limit\02 properties\00" ;; 772
+    "must have required property '\01missingProperty\02'\00" ;; 816
+    "must have property \01missingProperty\02 when property \01property\02 is present\00" ;; 864
+    "must match a schema in anyOf\00" ;; 937
+    "must match exactly one schema in oneOf\00" ;; 966
+    "must NOT be valid\00" ;; 1005
+    "must match \22\01failingKeyword\02\22 schema\00" ;; 1023
+    "must NOT have additional properties\00" ;; 1060
+    "property name must be valid\00" ;; 1096
+    "must contain at least 1 valid item(s)\00" ;; 1124
+    "must NOT have unevaluated properties\00" ;; 1162
+    "must NOT have unevaluated items\00" ;; 1199
+    "boolean schema is false\00" ;; 1231
+    "message\00" ;; 1255
+    "undefined\00" ;; 1263
+    "NaN\00" ;; 1273
+    "Infinity\00" ;; 1277
+    "-Infinity\00" ;; 1286
+  )
+
+  (func $render_param (param $map i32) (param $end i32) (param $key i32) (param $keylen i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $count i32) (local $p i32) (local $value i32)
+    (call $mp_header (local.get $map) (local.get $end)) (local.set $count) (local.set $h) (local.set $kind)
+    (local.set $p (i32.add (local.get $map) (local.get $h)))
+    (block $done (loop $loop
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.eqz (local.get $count)))
+      (call $mp_header (local.get $p) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+      (local.set $value (i32.add (i32.add (local.get $p) (local.get $h)) (local.get $n)))
+      (if (i32.eq (local.get $n) (local.get $keylen))
+        (then (if (call $bytes_equal (i32.add (local.get $p) (local.get $h)) (local.get $key) (local.get $n))
+          (then (return (local.get $value))))))
+      (local.set $p (call $mp_skip (local.get $value) (local.get $end)))
+      (local.set $count (i32.sub (local.get $count) (i32.const 1))) (br $loop)))
+    (i32.const 0))
+
+  ;; Raw integer params decode as JS Numbers, so only the safe integer range
+  ;; uses exact magnitude formatting; wider i64/u64 values first round to f64.
+  (func $render_param_text (param $out i32) (param $cap i32) (param $cur i32)
+    (param $p i32) (param $end i32) (param $tables i32) (param $scratch i32) (result i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $v i64) (local $x f64)
+    (call $work_add (i32.const 1))
+    (if (i32.eqz (local.get $p))
+      (then (return (call $mpw_raw (local.get $out) (local.get $cap) (local.get $cur)
+        (i32.add (local.get $tables) (i32.const 1263)) (i32.const 9)))))
+    (call $mp_header (local.get $p) (local.get $end)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.eq (local.get $kind) (global.get $K_STR))
+      (then (return (call $mpw_raw (local.get $out) (local.get $cap) (local.get $cur) (i32.add (local.get $p) (local.get $h)) (local.get $n)))))
+    (if (i32.eq (local.get $kind) (global.get $K_INT))
+      (then
+        (local.set $v (call $mp_i64 (local.get $p)))
+        (if (i32.eq (call $mp_num_kind (local.get $p)) (global.get $N_INT))
+          (then
+            (if (i32.and (i64.ge_s (local.get $v) (i64.const -9007199254740991)) (i64.le_s (local.get $v) (i64.const 9007199254740991)))
+              (then
+                (if (i64.lt_s (local.get $v) (i64.const 0))
+                  (then (local.set $v (i64.sub (i64.const 0) (local.get $v)))
+                    (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 45)))))
+                (return (call $render_u64 (local.get $out) (local.get $cap) (local.get $cur) (local.get $v)))))))))
+    (local.set $x (call $mp_f64 (local.get $p)))
+    (call $render_number_text (local.get $out) (local.get $cap) (local.get $cur) (local.get $x) (local.get $scratch)))
+
+  ;; Atomic complete renderer: live program/finished continuation are trusted,
+  ;; output is a disjoint caller-owned range. The tail contains all tables and
+  ;; numeric scratch; no allocator, persistent state, or address-zero meter.
+  ;; Raw-field implementation and params remain exactly the raw export's.
+  (func $render_error_complete_bound
+    (param $program i32) (param $cont i32) (param $index i32) (param $out i32) (param $cap i32) (result i32)
+    (local $n i32) (local $cur i32) (local $end i32) (local $tables i32) (local $scratch i32)
+    (local $params i32) (local $keyword i32) (local $code i32) (local $p i32) (local $start i32) (local $len i32) (local $b i32) (local $header i32)
+    (call $work_add (i32.const 1))
+    (if (i64.gt_u (i64.add (i64.extend_i32_u (local.get $out)) (i64.extend_i32_u (local.get $cap)))
+          (i64.shl (i64.extend_i32_u (memory.size)) (i64.const 16))) (then (return (i32.const -1))))
+    (if (i32.le_u (local.get $cap) (i32.const 4096)) (then (return (i32.const -1))))
+    (local.set $cap (i32.sub (local.get $cap) (i32.const 4096)))
+    (local.set $tables (i32.add (local.get $out) (local.get $cap)))
+    (local.set $scratch (i32.add (local.get $tables) (i32.const 3072)))
+    (local.set $n (call $render_error (local.get $program) (local.get $cont) (local.get $index) (local.get $out) (local.get $cap)))
+    (if (i32.lt_s (local.get $n) (i32.const 0)) (then (return (local.get $n))))
+    (call $work_add (call $bulk_charge (i32.const 1296)))
+    (memory.init $render_messages (local.get $tables) (i32.const 0) (i32.const 1296))
+    (local.set $end (i32.add (local.get $out) (local.get $n)))
+    ;; Skip instancePath and schemaPath key/value pairs, then keyword key.
+    (local.set $p (i32.add (local.get $out) (i32.const 1)))
+    (local.set $b (i32.const 5))
+    (loop $fields
+      (local.set $p (call $mp_skip (local.get $p) (local.get $end)))
+      (local.set $b (i32.sub (local.get $b) (i32.const 1))) (br_if $fields (local.get $b)))
+    (local.set $keyword (local.get $p))
+    (local.set $params (call $mp_skip (call $mp_skip (local.get $p) (local.get $end)) (local.get $end)))
+    (local.set $code (i32.load16_u (call $error_record (local.get $cont) (local.get $index))))
+    (local.set $p (i32.add (local.get $tables) (i32.load16_u (i32.add (local.get $tables) (i32.shl (local.get $code) (i32.const 1))))))
+    (local.set $cur (call $mpw_str (local.get $out) (local.get $cap) (local.get $n) (i32.add (local.get $tables) (i32.const 1255)) (i32.const 7)))
+    (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xdb)))
+    (local.set $header (local.get $cur))
+    (local.set $cur (call $mpw_u32be (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1))))
+    (block $done (loop $template
+      (call $work_add (i32.const 1))
+      (local.set $b (i32.load8_u (local.get $p)))
+      (br_if $done (i32.eqz (local.get $b)))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (if (i32.eq (local.get $b) (i32.const 1))
+        (then
+          (local.set $start (local.get $p))
+          (block $key_done (loop $key
+            (call $work_add (i32.const 1))
+            (br_if $key_done (i32.eq (i32.load8_u (local.get $p)) (i32.const 2)))
+            (local.set $p (i32.add (local.get $p) (i32.const 1))) (br $key)))
+          (local.set $len (i32.sub (local.get $p) (local.get $start)))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (local.set $cur (call $render_param_text (local.get $out) (local.get $cap) (local.get $cur)
+            (call $render_param (local.get $params) (local.get $end) (local.get $start) (local.get $len))
+            (local.get $end) (local.get $tables) (local.get $scratch))))
+        (else
+          (if (i32.eq (local.get $b) (i32.const 3))
+            (then (local.set $cur (call $render_param_text (local.get $out) (local.get $cap) (local.get $cur)
+              (local.get $keyword) (local.get $end) (local.get $tables) (local.get $scratch))))
+            (else (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (local.get $b)))))))
+      (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (local.get $cur))))
+      (br $template)))
+    (drop (call $mpw_u32be (local.get $out) (local.get $cap) (local.get $header) (i32.sub (i32.sub (local.get $cur) (local.get $header)) (i32.const 4))))
+    (drop (call $mpw_byte (local.get $out) (local.get $cap) (i32.const 0) (i32.const 0x85)))
+    (local.get $cur))
+
+  (func (export "render_error_complete")
+    (param $program i32) (param $cont i32) (param $index i32) (param $out i32) (param $cap i32) (result i32 i64 i32)
+    (local $n i32)
+    (call $work_begin (i32.const 0) (i32.const 1))
+    (local.set $n (call $render_error_complete_bound (local.get $program) (local.get $cont) (local.get $index) (local.get $out) (local.get $cap)))
+    (global.set $work_active (i32.const 0))
+    (local.get $n) (global.get $work_total) (global.get $work_overflow))
+
+  ;; ==========================================================================
+  ;; Set matching. The continuation gains a per-route result table after the
+  ;; regex region: [verdict:4][error start:4][error count:4][hits:4] × N.
+  ;; The first grant runs the gate pass over the top-level object (one hash
+  ;; per pair), then routes are decided or evaluated one at a time on the
+  ;; ordinary frame stack; each route's errors are a contiguous range of
+  ;; the stored records.
+  ;; ==========================================================================
+  (global $CH_ROUTES_OFFSET i32 (i32.const 120))
+  (global $CH_ROUTE_CURSOR i32 (i32.const 124))
+  (global $CH_ROUTE_ABORT i32 (i32.const 128))
+  (global $CH_ROUTE_COUNT i32 (i32.const 132))
+  (global $RT_VERDICT i32 (i32.const 0))
+  (global $RT_ERROR_START i32 (i32.const 4))
+  (global $RT_ERROR_COUNT i32 (i32.const 8))
+  (global $RT_HITS i32 (i32.const 12))
+  (global $RT_SIZE i32 (i32.const 16))
+
+  (func $route_count (export "route_count") (param $cont i32) (result i32)
+    (call $ch (local.get $cont) (global.get $CH_ROUTE_COUNT)))
+  (func $route_result (export "route_result") (param $cont i32) (param $route i32) (result i32)
+    (i32.add (i32.add (local.get $cont) (call $ch (local.get $cont) (global.get $CH_ROUTES_OFFSET)))
+             (i32.mul (local.get $route) (global.get $RT_SIZE))))
+  (func $program_route_count (export "program_route_count") (param $program i32) (result i32)
+    (call $ph (local.get $program) (global.get $PH_ROUTE_COUNT)))
+
+  (func $prog_route_entry (param $program i32) (param $route i32) (result i32)
+    (i32.add (i32.add (local.get $program) (call $ph (local.get $program) (global.get $PH_ROUTE_TABLE)))
+             (i32.mul (local.get $route) (global.get $ROUTE_ENTRY_SIZE))))
+
+  ;; Add one hit to every route in a gate entry's bitset.
+  (func $gate_apply (param $cont i32) (param $program i32) (param $entry i32)
+    (local $bits i32) (local $routes i32) (local $words i32) (local $w i32) (local $word i32) (local $b i32) (local $route i32) (local $rt i32)
+    (local.set $bits (i32.add (local.get $program) (i32.load offset=16 (local.get $entry))))
+    (local.set $routes (call $ch (local.get $cont) (global.get $CH_ROUTE_COUNT)))
+    (local.set $words (i32.shr_u (i32.add (local.get $routes) (i32.const 31)) (i32.const 5)))
+    (block $done (loop $wl
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $w) (local.get $words)))
+      (local.set $word (i32.load (i32.add (local.get $bits) (i32.shl (local.get $w) (i32.const 2)))))
+      (block $bd (loop $bl
+        (call $work_add (i32.const 1))
+        (br_if $bd (i32.eqz (local.get $word)))
+        (local.set $b (i32.ctz (local.get $word)))
+        (local.set $word (i32.and (local.get $word) (i32.sub (local.get $word) (i32.const 1))))
+        (local.set $route (i32.add (i32.shl (local.get $w) (i32.const 5)) (local.get $b)))
+        (local.set $rt (call $route_result (local.get $cont) (local.get $route)))
+        (i32.store offset=12 (local.get $rt) (i32.add (i32.load offset=12 (local.get $rt)) (i32.const 1)))
+        (br $bl)))
+      (local.set $w (i32.add (local.get $w) (i32.const 1)))
+      (br $wl))))
+
+  ;; Probe the gate table for one (key, kind) and apply every matching entry.
+  ;; Empty terminating probes are work too; each inspected slot is charged.
+  (func $gate_probe (param $cont i32) (param $program i32) (param $key i32) (param $key_len i32) (param $kind i32)
+                    (param $value i32) (param $value_end i32) (param $type_mask i32) (param $value_hash i32)
+    (local $table i32) (local $cap i32) (local $hash i32) (local $i i32) (local $entry i32) (local $kstr i32) (local $pv i32) (local $mask i32) (local $ok i32)
+    (local.set $table (i32.add (local.get $program) (call $ph (local.get $program) (global.get $PH_GATE_TABLE))))
+    (local.set $cap (call $ph (local.get $program) (global.get $PH_GATE_CAPACITY)))
+    (local.set $hash (call $gate_hash (local.get $key) (local.get $key_len) (local.get $kind)
+      (select (local.get $value_hash) (i32.const 0) (i32.eq (local.get $kind) (global.get $GATE_VALUE)))))
+    (local.set $i (i32.and (local.get $hash) (i32.sub (local.get $cap) (i32.const 1))))
+    (block $done (loop $probe
+      (call $work_add (i32.const 1))
+      (local.set $entry (i32.add (local.get $table) (i32.mul (local.get $i) (global.get $GATE_ENTRY_SIZE))))
+      (br_if $done (i32.eqz (i32.load offset=4 (local.get $entry))))
+      (if (i32.eq (i32.load (local.get $entry)) (local.get $hash))
+        (then
+          (local.set $kstr (i32.add (local.get $program) (i32.load offset=4 (local.get $entry))))
+          (if (i32.eq (i32.load (local.get $kstr)) (local.get $key_len))
+            (then
+              (if (call $bytes_equal (i32.add (local.get $kstr) (i32.const 4)) (local.get $key) (local.get $key_len))
+                (then
+                  (local.set $pv (i32.load offset=8 (local.get $entry)))
+                  (local.set $mask (i32.load offset=12 (local.get $entry)))
+                  (local.set $ok (i32.const 0))
+                  (if (i32.eq (local.get $kind) (global.get $GATE_PRESENCE))
+                    (then (local.set $ok (i32.and (i32.eq (local.get $pv) (global.get $NONE)) (i32.eqz (local.get $mask))))))
+                  (if (i32.eq (local.get $kind) (global.get $GATE_TYPE))
+                    (then (local.set $ok (i32.and (i32.eq (local.get $pv) (global.get $NONE)) (i32.eq (local.get $mask) (local.get $type_mask))))))
+                  (if (i32.eq (local.get $kind) (global.get $GATE_VALUE))
+                    (then
+                      (if (i32.ne (local.get $pv) (global.get $NONE))
+                        (then
+                          (local.set $pv (i32.add (local.get $program) (local.get $pv)))
+                          (local.set $ok (i32.eq (call $mp_equal
+                            (i32.add (local.get $pv) (i32.const 8)) (i32.add (i32.add (local.get $pv) (i32.const 8)) (i32.load (local.get $pv)))
+                            (local.get $value) (local.get $value_end) (i32.const 0)) (i32.const 1)))))))
+                  (if (local.get $ok) (then (call $gate_apply (local.get $cont) (local.get $program) (local.get $entry))))))))))
+      (local.set $i (i32.and (i32.add (local.get $i) (i32.const 1)) (i32.sub (local.get $cap) (i32.const 1))))
+      (br $probe))))
+
+  ;; The gate pass: one walk over the top-level object's pairs — a
+  ;; presence probe, a type probe (every mask entry for the key), and a
+  ;; value probe per pair.
+  (func $set_gate_pass (param $cont i32)
+    (local $program i32) (local $doc i32) (local $doc_end i32) (local $kind i32) (local $h i32) (local $n i32) (local $cursor i32) (local $i i32)
+    (local $kk i32) (local $kh i32) (local $kn i32) (local $key i32) (local $value i32) (local $next i32) (local $vmask i32) (local $vhash i32)
+    (local.set $program (call $ch (local.get $cont) (global.get $CH_PROGRAM_ADDRESS)))
+    (local.set $doc (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS)))
+    (local.set $doc_end (i32.add (local.get $doc) (call $ch (local.get $cont) (global.get $CH_DOCUMENT_BYTES))))
+    (call $mp_header (local.get $doc) (local.get $doc_end)) (local.set $n) (local.set $h) (local.set $kind)
+    (if (i32.ne (local.get $kind) (global.get $K_MAP)) (then (return)))
+    (if (i32.eqz (call $ph (local.get $program) (global.get $PH_GATE_CAPACITY))) (then (return)))
+    (local.set $cursor (i32.add (local.get $doc) (local.get $h)))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (call $mp_header (local.get $cursor) (local.get $doc_end)) (local.set $kn) (local.set $kh) (local.set $kk)
+      (br_if $done (i32.eq (local.get $kk) (global.get $K_INVALID)))
+      (local.set $value (call $mp_skip (local.get $cursor) (local.get $doc_end)))
+      (br_if $done (i32.lt_s (local.get $value) (i32.const 0)))
+      (local.set $next (call $mp_skip (local.get $value) (local.get $doc_end)))
+      (br_if $done (i32.lt_s (local.get $next) (i32.const 0)))
+      (if (i32.eq (local.get $kk) (global.get $K_STR))
+        (then
+          (local.set $key (i32.add (local.get $cursor) (local.get $kh)))
+          (call $gate_probe (local.get $cont) (local.get $program) (local.get $key) (local.get $kn) (global.get $GATE_PRESENCE)
+            (local.get $value) (local.get $doc_end) (i32.const 0) (i32.const 0))
+          (local.set $vmask (call $mp_type_mask (local.get $value) (local.get $doc_end)))
+          (call $gate_probe_types (local.get $cont) (local.get $program) (local.get $key) (local.get $kn) (local.get $value) (local.get $doc_end) (local.get $vmask))
+          (local.set $vhash (call $mp_hash (local.get $value) (local.get $doc_end) (i32.const 0)))
+          (call $gate_probe (local.get $cont) (local.get $program) (local.get $key) (local.get $kn) (global.get $GATE_VALUE)
+            (local.get $value) (local.get $doc_end) (i32.const 0) (local.get $vhash))))
+      (local.set $cursor (local.get $next))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l))))
+
+  ;; Type gates hash on the key alone; every entry for the key whose mask
+  ;; admits the value's type applies (a draft-04 mask carries bit 128:
+  ;; an integral float is not an integer there).
+  (func $gate_probe_types (param $cont i32) (param $program i32) (param $key i32) (param $key_len i32)
+                          (param $value i32) (param $value_end i32) (param $vmask i32)
+    (local $table i32) (local $cap i32) (local $hash i32) (local $i i32) (local $entry i32) (local $kstr i32) (local $mask i32) (local $r i32)
+    (local.set $table (i32.add (local.get $program) (call $ph (local.get $program) (global.get $PH_GATE_TABLE))))
+    (local.set $cap (call $ph (local.get $program) (global.get $PH_GATE_CAPACITY)))
+    (local.set $hash (call $gate_hash (local.get $key) (local.get $key_len) (global.get $GATE_TYPE) (i32.const 0)))
+    (local.set $i (i32.and (local.get $hash) (i32.sub (local.get $cap) (i32.const 1))))
+    (block $done (loop $probe
+      (call $work_add (i32.const 1))
+      (local.set $entry (i32.add (local.get $table) (i32.mul (local.get $i) (global.get $GATE_ENTRY_SIZE))))
+      (br_if $done (i32.eqz (i32.load offset=4 (local.get $entry))))
+      (if (i32.and (i32.eq (i32.load (local.get $entry)) (local.get $hash))
+                   (i32.and (i32.eq (i32.load offset=8 (local.get $entry)) (global.get $NONE)) (i32.ne (i32.load offset=12 (local.get $entry)) (i32.const 0))))
+        (then
+          (local.set $kstr (i32.add (local.get $program) (i32.load offset=4 (local.get $entry))))
+          (if (i32.eq (i32.load (local.get $kstr)) (local.get $key_len))
+            (then
+              (if (call $bytes_equal (i32.add (local.get $kstr) (i32.const 4)) (local.get $key) (local.get $key_len))
+                (then
+                  (local.set $mask (i32.load offset=12 (local.get $entry)))
+                  (local.set $r (local.get $vmask))
+                  (if (i32.and (i32.ne (i32.and (local.get $mask) (i32.const 128)) (i32.const 0))
+                               (i32.eq (call $mp_kind (local.get $value) (local.get $value_end)) (global.get $K_FLOAT)))
+                    (then (local.set $r (i32.and (local.get $r) (i32.xor (global.get $T_INTEGER) (i32.const -1))))))
+                  (if (i32.and (local.get $r) (local.get $mask))
+                    (then (call $gate_apply (local.get $cont) (local.get $program) (local.get $entry))))))))))
+      (local.set $i (i32.and (i32.add (local.get $i) (i32.const 1)) (i32.sub (local.get $cap) (i32.const 1))))
+      (br $probe))))
+
+  ;; Record the finished route's verdict and error range, reset the
+  ;; per-route machine state, and move on.
+  (func $set_route_finish (param $cont i32) (param $valid i32)
+    (local $rt i32) (local $route i32)
+    (local.set $route (call $ch (local.get $cont) (global.get $CH_ROUTE_CURSOR)))
+    (local.set $rt (call $route_result (local.get $cont) (local.get $route)))
+    (i32.store (local.get $rt) (local.get $valid))
+    (i32.store offset=8 (local.get $rt) (i32.sub (call $ch (local.get $cont) (global.get $CH_ERROR_STORED)) (i32.load offset=4 (local.get $rt))))
+    (call $ch_set (local.get $cont) (global.get $CH_FRAME_COUNT) (i32.const 0))
+    (call $ch_set (local.get $cont) (global.get $CH_PATH_COUNT) (i32.const 0))
+    (call $ch_set (local.get $cont) (global.get $CH_ARENA_CURSOR) (i32.const 0))
+    (call $ch_set (local.get $cont) (global.get $CH_TRIAL_DEPTH) (i32.const 0))
+    (call $ch_set (local.get $cont) (global.get $CH_ROUTE_ABORT) (i32.const 0))
+    (call $set_advance (local.get $cont)))
+
+  ;; Decide routes from their gates until one needs evaluation (its root
+  ;; frame is pushed) or all are decided (the run completes).
+  (func $set_advance (param $cont i32)
+    (local $program i32) (local $route i32) (local $count i32) (local $entry i32) (local $rt i32) (local $gates i32) (local $flags i32) (local $hits i32)
+    (local $doc i32) (local $doc_is_map i32) (local $any i32) (local $test i32)
+    (local.set $program (call $ch (local.get $cont) (global.get $CH_PROGRAM_ADDRESS)))
+    (local.set $count (call $ch (local.get $cont) (global.get $CH_ROUTE_COUNT)))
+    (local.set $test (i32.eq (call $ch (local.get $cont) (global.get $CH_MODE)) (global.get $MODE_TEST)))
+    (local.set $doc (call $ch (local.get $cont) (global.get $CH_DOCUMENT_ADDRESS)))
+    (local.set $doc_is_map (i32.eq (call $mp_kind (local.get $doc) (i32.add (local.get $doc) (call $ch (local.get $cont) (global.get $CH_DOCUMENT_BYTES)))) (global.get $K_MAP)))
+    (local.set $route (i32.add (call $ch (local.get $cont) (global.get $CH_ROUTE_CURSOR)) (i32.const 1)))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $route) (local.get $count)))
+      (call $ch_set (local.get $cont) (global.get $CH_ROUTE_CURSOR) (local.get $route))
+      (call $charge (local.get $cont) (i32.const 1))
+      (local.set $entry (call $prog_route_entry (local.get $program) (local.get $route)))
+      (local.set $rt (call $route_result (local.get $cont) (local.get $route)))
+      (local.set $gates (i32.load offset=4 (local.get $entry)))
+      (local.set $flags (i32.load offset=8 (local.get $entry)))
+      (local.set $hits (i32.load offset=12 (local.get $rt)))
+      (i32.store offset=4 (local.get $rt) (call $ch (local.get $cont) (global.get $CH_ERROR_STORED)))
+      (i32.store offset=8 (local.get $rt) (i32.const 0))
+      ;; gates speak only about objects: on any other document required/
+      ;; properties are vacuous and only `type: object` can fail
+      (if (i32.eqz (local.get $doc_is_map))
+        (then
+          (if (i32.and (local.get $flags) (global.get $ROUTE_FLAG_ROOT_OBJECT))
+            (then
+              (if (local.get $test)
+                (then
+                  (i32.store (local.get $rt) (i32.const 0))
+                  (local.set $route (i32.add (local.get $route) (i32.const 1)))
+                  (br $l))))
+            (else
+              (if (i32.and (local.get $flags) (global.get $ROUTE_FLAG_FULL))
+                (then
+                  (i32.store (local.get $rt) (i32.const 1))
+                  (local.set $route (i32.add (local.get $route) (i32.const 1)))
+                  (br $l))))))
+        (else
+          ;; all gates hit and nothing else to check: matched without evaluation
+          (if (i32.and (i32.and (local.get $flags) (global.get $ROUTE_FLAG_FULL)) (i32.eq (local.get $hits) (local.get $gates)))
+            (then
+              (i32.store (local.get $rt) (i32.const 1))
+              (local.set $route (i32.add (local.get $route) (i32.const 1)))
+              (br $l)))
+          ;; a missed gate rejects without evaluation in TEST mode; VALIDATE
+          ;; mode still evaluates so the error list equals single validation
+          (if (i32.and (local.get $test) (i32.lt_u (local.get $hits) (local.get $gates)))
+            (then
+              (i32.store (local.get $rt) (i32.const 0))
+              (local.set $route (i32.add (local.get $route) (i32.const 1)))
+              (br $l)))))
+      (if (i32.eqz (call $push_frame (local.get $cont) (global.get $FK_NODE) (i32.load (local.get $entry)) (i32.const 0) (i32.const 0)))
+        (then
+          ;; frame capacity 0 cannot happen (continuation_size requires >= 1)
+          (i32.store (local.get $rt) (i32.const 0))
+          (local.set $route (i32.add (local.get $route) (i32.const 1)))
+          (br $l)))
+      (return)))
+    ;; every route decided
+    (call $ch_set (local.get $cont) (global.get $CH_ROUTE_CURSOR) (local.get $count))
+    (local.set $route (i32.const 0))
+    (block $ad (loop $al
+      (call $work_add (i32.const 1))
+      (br_if $ad (i32.ge_u (local.get $route) (local.get $count)))
+      (local.set $any (i32.or (local.get $any) (i32.load (call $route_result (local.get $cont) (local.get $route)))))
+      (local.set $route (i32.add (local.get $route) (i32.const 1)))
+      (br $al)))
+    (call $ch_set (local.get $cont) (global.get $CH_PHASE) (global.get $PHASE_COMPLETE))
+    (call $ch_set (local.get $cont) (global.get $CH_RESULT) (select (global.get $STATUS_VALID) (global.get $STATUS_INVALID) (local.get $any))))
+
+  ;; ==========================================================================
+  ;; JSON text transcoder: streaming JSON → msgpack over caller-owned
+  ;; buffers, byte-for-byte what membrane/msgpack.js's encoder produces for
+  ;; JSON.parse of the same text (smallest integer forms, float64 for
+  ;; everything else, fixstr/str8/16/32, fixmap/map16/32, fixarray/
+  ;; array16/32). Numbers are converted on the exact fast path only — at
+  ;; most 15 significant digits and a decimal exponent within ±22, where
+  ;; one f64 multiply or divide by an exact power of ten is correctly
+  ;; rounded; anything else returns UNSUPPORTED with the number's offset so
+  ;; the host falls back to its own parser rather than accept a
+  ;; double-rounded value. Output bound: 3 × input + 16 bytes.
+  ;;
+  ;;   transcode_json(input, len, out, cap, fuel) → (status, fuel, bytes)
+  ;;   status OK: bytes = output length; PAUSED: the grant was below the
+  ;;   charge (bulk_charge(len)); SYNTAX_ERROR / UNSUPPORTED /
+  ;;   BUFFER_TOO_SMALL / LIMIT_EXCEEDED: bytes = input offset.
+  ;; ==========================================================================
+  (global $tj_in (mut i32) (i32.const 0))
+  (global $tj_end (mut i32) (i32.const 0))
+  (global $tj_pos (mut i32) (i32.const 0))
+  (global $tj_out (mut i32) (i32.const 0))
+  (global $tj_cap (mut i32) (i32.const 0))
+  (global $tj_cur (mut i32) (i32.const 0))
+  (global $tj_depth (mut i32) (i32.const 0))
+  (global $tj_error (mut i32) (i32.const 0))
+  (global $TJ_MAX_DEPTH i32 (i32.const 512))
+
+  (func $transcode_json (export "transcode_json")
+    (param $input i32) (param $len i32) (param $out i32) (param $cap i32) (param $fuel i32)
+    (result i32 i32 i32)
+    (local $charge i32) (local $status i32)
+    (local.set $charge (i32.add (i32.const 1) (call $bulk_charge (local.get $len))))
+    (if (i32.lt_s (local.get $fuel) (local.get $charge))
+      (then (return (global.get $STATUS_PAUSED) (local.get $fuel) (i32.const 0))))
+    (local.set $fuel (i32.sub (local.get $fuel) (local.get $charge)))
+    (global.set $tj_in (local.get $input))
+    (global.set $tj_end (i32.add (local.get $input) (local.get $len)))
+    (global.set $tj_pos (local.get $input))
+    (global.set $tj_out (local.get $out))
+    (global.set $tj_cap (local.get $cap))
+    (global.set $tj_cur (i32.const 0))
+    (global.set $tj_depth (i32.const 0))
+    (global.set $tj_error (i32.const 0))
+    (call $tj_ws)
+    (local.set $status (call $tj_value))
+    (if (local.get $status)
+      (then (return (local.get $status) (local.get $fuel) (i32.sub (global.get $tj_error) (local.get $input)))))
+    (call $tj_ws)
+    (if (i32.ne (global.get $tj_pos) (global.get $tj_end))
+      (then (return (global.get $STATUS_SYNTAX_ERROR) (local.get $fuel) (i32.sub (global.get $tj_pos) (local.get $input)))))
+    (global.get $STATUS_OK) (local.get $fuel) (global.get $tj_cur))
+
+  (func $tj_fail (param $status i32) (param $at i32) (result i32)
+    (global.set $tj_error (local.get $at))
+    (local.get $status))
+
+  (func $tj_ws
+    (local $b i32)
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (global.get $tj_pos) (global.get $tj_end)))
+      (local.set $b (i32.load8_u (global.get $tj_pos)))
+      (br_if $done (i32.eqz (i32.or (i32.or (i32.eq (local.get $b) (i32.const 32)) (i32.eq (local.get $b) (i32.const 9)))
+                                    (i32.or (i32.eq (local.get $b) (i32.const 10)) (i32.eq (local.get $b) (i32.const 13))))))
+      (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+      (br $l))))
+
+  (func $tj_emit (param $b i32) (result i32)
+    (local $cur i32)
+    (local.set $cur (call $mpw_byte (global.get $tj_out) (global.get $tj_cap) (global.get $tj_cur) (local.get $b)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (call $tj_fail (global.get $STATUS_BUFFER_TOO_SMALL) (global.get $tj_pos)))))
+    (global.set $tj_cur (local.get $cur))
+    (i32.const 0))
+
+  (func $tj_emit_u32 (param $v i32) (result i32)
+    (local $cur i32)
+    (local.set $cur (call $mpw_u32be (global.get $tj_out) (global.get $tj_cap) (global.get $tj_cur) (local.get $v)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (call $tj_fail (global.get $STATUS_BUFFER_TOO_SMALL) (global.get $tj_pos)))))
+    (global.set $tj_cur (local.get $cur))
+    (i32.const 0))
+
+  (func $tj_expect (param $text i32) (param $len i32) (result i32)
+    (if (i32.gt_u (i32.add (global.get $tj_pos) (local.get $len)) (global.get $tj_end))
+      (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+    (if (i32.eqz (call $bytes_equal (global.get $tj_pos) (local.get $text) (local.get $len)))
+      (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+    (global.set $tj_pos (i32.add (global.get $tj_pos) (local.get $len)))
+    (i32.const 0))
+
+  (func $tj_value (result i32)
+    (local $b i32) (local $s i32) (local $lit i32)
+    (if (i32.ge_u (global.get $tj_pos) (global.get $tj_end))
+      (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+    (local.set $b (i32.load8_u (global.get $tj_pos)))
+    (if (i32.eq (local.get $b) (i32.const 123)) (then (return (call $tj_object))))
+    (if (i32.eq (local.get $b) (i32.const 91)) (then (return (call $tj_array))))
+    (if (i32.eq (local.get $b) (i32.const 34)) (then (return (call $tj_string (i32.const 0)))))
+    ;; literals, compared in place as little-endian words
+    (if (i32.eq (local.get $b) (i32.const 116))
+      (then
+        (if (i32.or (i32.gt_u (i32.add (global.get $tj_pos) (i32.const 4)) (global.get $tj_end))
+                    (i32.ne (i32.load (global.get $tj_pos)) (i32.const 0x65757274)))
+          (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+        (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 4)))
+        (return (call $tj_emit (i32.const 0xc3)))))
+    (if (i32.eq (local.get $b) (i32.const 102))
+      (then
+        (if (i32.or (i32.gt_u (i32.add (global.get $tj_pos) (i32.const 5)) (global.get $tj_end))
+                    (i32.or (i32.ne (i32.load (global.get $tj_pos)) (i32.const 0x736c6166)) (i32.ne (i32.load8_u offset=4 (global.get $tj_pos)) (i32.const 101))))
+          (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+        (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 5)))
+        (return (call $tj_emit (i32.const 0xc2)))))
+    (if (i32.eq (local.get $b) (i32.const 110))
+      (then
+        (if (i32.or (i32.gt_u (i32.add (global.get $tj_pos) (i32.const 4)) (global.get $tj_end))
+                    (i32.ne (i32.load (global.get $tj_pos)) (i32.const 0x6c6c756e)))
+          (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+        (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 4)))
+        (return (call $tj_emit (i32.const 0xc0)))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 45)) (i32.and (i32.ge_u (local.get $b) (i32.const 48)) (i32.le_u (local.get $b) (i32.const 57))))
+      (then (return (call $tj_number))))
+    (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))
+
+  ;; Container headers are written in their 5-byte form and shrunk to the
+  ;; canonical form once the count is known.
+  (func $tj_shrink_header (param $header_at i32) (param $count i32) (param $is_map i32)
+    (local $size i32) (local $body i32) (local $out i32)
+    (local.set $out (global.get $tj_out))
+    (local.set $body (i32.add (local.get $header_at) (i32.const 5)))
+    (if (i32.lt_u (local.get $count) (i32.const 16))
+      (then
+        (i32.store8 (i32.add (local.get $out) (local.get $header_at)) (i32.or (select (i32.const 0x80) (i32.const 0x90) (local.get $is_map)) (local.get $count)))
+        (local.set $size (i32.const 1)))
+      (else
+        (if (i32.lt_u (local.get $count) (i32.const 65536))
+          (then
+            (i32.store8 (i32.add (local.get $out) (local.get $header_at)) (select (i32.const 0xde) (i32.const 0xdc) (local.get $is_map)))
+            (i32.store8 (i32.add (local.get $out) (i32.add (local.get $header_at) (i32.const 1))) (i32.shr_u (local.get $count) (i32.const 8)))
+            (i32.store8 (i32.add (local.get $out) (i32.add (local.get $header_at) (i32.const 2))) (local.get $count))
+            (local.set $size (i32.const 3)))
+          (else (return)))))
+    (memory.copy (i32.add (local.get $out) (i32.add (local.get $header_at) (local.get $size)))
+                 (i32.add (local.get $out) (local.get $body))
+                 (i32.sub (global.get $tj_cur) (local.get $body)))
+    (global.set $tj_cur (i32.sub (global.get $tj_cur) (i32.sub (i32.const 5) (local.get $size)))))
+
+  (func $tj_array (result i32)
+    (local $header_at i32) (local $count i32) (local $s i32) (local $b i32)
+    (if (i32.ge_u (global.get $tj_depth) (global.get $TJ_MAX_DEPTH))
+      (then (return (call $tj_fail (global.get $STATUS_LIMIT_EXCEEDED) (global.get $tj_pos)))))
+    (global.set $tj_depth (i32.add (global.get $tj_depth) (i32.const 1)))
+    (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+    (local.set $header_at (global.get $tj_cur))
+    (local.set $s (call $tj_emit (i32.const 0xdd)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $tj_emit_u32 (i32.const 0)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (call $tj_ws)
+    (if (i32.and (i32.lt_u (global.get $tj_pos) (global.get $tj_end)) (i32.eq (i32.load8_u (global.get $tj_pos)) (i32.const 93)))
+      (then
+        (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+        (call $tj_shrink_header (local.get $header_at) (i32.const 0) (i32.const 0))
+        (global.set $tj_depth (i32.sub (global.get $tj_depth) (i32.const 1)))
+        (return (i32.const 0))))
+    (block $done (loop $l
+      (call $tj_ws)
+      (local.set $s (call $tj_value))
+      (if (local.get $s) (then (return (local.get $s))))
+      (local.set $count (i32.add (local.get $count) (i32.const 1)))
+      (call $tj_ws)
+      (if (i32.ge_u (global.get $tj_pos) (global.get $tj_end))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+      (local.set $b (i32.load8_u (global.get $tj_pos)))
+      (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+      (br_if $done (i32.eq (local.get $b) (i32.const 93)))
+      (if (i32.ne (local.get $b) (i32.const 44))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (i32.sub (global.get $tj_pos) (i32.const 1))))))
+      (br $l)))
+    (i32.store (i32.add (global.get $tj_out) (i32.add (local.get $header_at) (i32.const 1)))
+      (i32.or (i32.or (i32.shl (local.get $count) (i32.const 24)) (i32.shl (i32.and (local.get $count) (i32.const 0xff00)) (i32.const 8)))
+              (i32.or (i32.and (i32.shr_u (local.get $count) (i32.const 8)) (i32.const 0xff00)) (i32.shr_u (local.get $count) (i32.const 24)))))
+    (call $tj_shrink_header (local.get $header_at) (local.get $count) (i32.const 0))
+    (global.set $tj_depth (i32.sub (global.get $tj_depth) (i32.const 1)))
+    (i32.const 0))
+
+  (func $tj_object (result i32)
+    (local $header_at i32) (local $count i32) (local $s i32) (local $b i32)
+    (if (i32.ge_u (global.get $tj_depth) (global.get $TJ_MAX_DEPTH))
+      (then (return (call $tj_fail (global.get $STATUS_LIMIT_EXCEEDED) (global.get $tj_pos)))))
+    (global.set $tj_depth (i32.add (global.get $tj_depth) (i32.const 1)))
+    (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+    (local.set $header_at (global.get $tj_cur))
+    (local.set $s (call $tj_emit (i32.const 0xdf)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $tj_emit_u32 (i32.const 0)))
+    (if (local.get $s) (then (return (local.get $s))))
+    (call $tj_ws)
+    (if (i32.and (i32.lt_u (global.get $tj_pos) (global.get $tj_end)) (i32.eq (i32.load8_u (global.get $tj_pos)) (i32.const 125)))
+      (then
+        (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+        (call $tj_shrink_header (local.get $header_at) (i32.const 0) (i32.const 1))
+        (global.set $tj_depth (i32.sub (global.get $tj_depth) (i32.const 1)))
+        (return (i32.const 0))))
+    (block $done (loop $l
+      (call $tj_ws)
+      (if (i32.or (i32.ge_u (global.get $tj_pos) (global.get $tj_end)) (i32.ne (i32.load8_u (global.get $tj_pos)) (i32.const 34)))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+      (local.set $s (call $tj_string (i32.const 0)))
+      (if (local.get $s) (then (return (local.get $s))))
+      (call $tj_ws)
+      (if (i32.or (i32.ge_u (global.get $tj_pos) (global.get $tj_end)) (i32.ne (i32.load8_u (global.get $tj_pos)) (i32.const 58)))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+      (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+      (call $tj_ws)
+      (local.set $s (call $tj_value))
+      (if (local.get $s) (then (return (local.get $s))))
+      (local.set $count (i32.add (local.get $count) (i32.const 1)))
+      (call $tj_ws)
+      (if (i32.ge_u (global.get $tj_pos) (global.get $tj_end))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+      (local.set $b (i32.load8_u (global.get $tj_pos)))
+      (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+      (br_if $done (i32.eq (local.get $b) (i32.const 125)))
+      (if (i32.ne (local.get $b) (i32.const 44))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (i32.sub (global.get $tj_pos) (i32.const 1))))))
+      (br $l)))
+    (i32.store (i32.add (global.get $tj_out) (i32.add (local.get $header_at) (i32.const 1)))
+      (i32.or (i32.or (i32.shl (local.get $count) (i32.const 24)) (i32.shl (i32.and (local.get $count) (i32.const 0xff00)) (i32.const 8)))
+              (i32.or (i32.and (i32.shr_u (local.get $count) (i32.const 8)) (i32.const 0xff00)) (i32.shr_u (local.get $count) (i32.const 24)))))
+    (call $tj_shrink_header (local.get $header_at) (local.get $count) (i32.const 1))
+    (global.set $tj_depth (i32.sub (global.get $tj_depth) (i32.const 1)))
+    (i32.const 0))
+
+  ;; A JSON string → msgpack str. The string header is written after the
+  ;; body (its length is only known then) by emitting the body at
+  ;; cur + 5, then moving it back under the right-sized header.
+  (func $tj_string (param $unused i32) (result i32)
+    (local $start i32) (local $body i32) (local $b i32) (local $s i32) (local $cp i32) (local $lo i32) (local $len i32) (local $size i32)
+    (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+    (local.set $start (global.get $tj_cur))
+    (local.set $body (i32.add (local.get $start) (i32.const 5)))
+    (if (i32.gt_u (local.get $body) (global.get $tj_cap)) (then (return (call $tj_fail (global.get $STATUS_BUFFER_TOO_SMALL) (global.get $tj_pos)))))
+    (global.set $tj_cur (local.get $body))
+    (block $done (loop $l
+      (if (i32.ge_u (global.get $tj_pos) (global.get $tj_end))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+      (local.set $b (i32.load8_u (global.get $tj_pos)))
+      (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+      (br_if $done (i32.eq (local.get $b) (i32.const 34)))
+      (if (i32.lt_u (local.get $b) (i32.const 32))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (i32.sub (global.get $tj_pos) (i32.const 1))))))
+      (if (i32.ne (local.get $b) (i32.const 92))
+        (then
+          (local.set $s (call $tj_emit (local.get $b)))
+          (if (local.get $s) (then (return (local.get $s))))
+          (br $l)))
+      ;; escape
+      (if (i32.ge_u (global.get $tj_pos) (global.get $tj_end))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+      (local.set $b (i32.load8_u (global.get $tj_pos)))
+      (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+      (local.set $cp (i32.const -1))
+      (if (i32.eq (local.get $b) (i32.const 34)) (then (local.set $cp (i32.const 34))))
+      (if (i32.eq (local.get $b) (i32.const 92)) (then (local.set $cp (i32.const 92))))
+      (if (i32.eq (local.get $b) (i32.const 47)) (then (local.set $cp (i32.const 47))))
+      (if (i32.eq (local.get $b) (i32.const 98)) (then (local.set $cp (i32.const 8))))
+      (if (i32.eq (local.get $b) (i32.const 102)) (then (local.set $cp (i32.const 12))))
+      (if (i32.eq (local.get $b) (i32.const 110)) (then (local.set $cp (i32.const 10))))
+      (if (i32.eq (local.get $b) (i32.const 114)) (then (local.set $cp (i32.const 13))))
+      (if (i32.eq (local.get $b) (i32.const 116)) (then (local.set $cp (i32.const 9))))
+      (if (i32.eq (local.get $b) (i32.const 117))
+        (then
+          (local.set $cp (call $tj_hex4))
+          (if (i32.lt_s (local.get $cp) (i32.const 0)) (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+          ;; surrogate pairs combine; a lone surrogate is not a scalar value
+          (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0xd800)) (i32.le_u (local.get $cp) (i32.const 0xdbff)))
+            (then
+              (if (i32.or (i32.gt_u (i32.add (global.get $tj_pos) (i32.const 6)) (global.get $tj_end))
+                          (i32.or (i32.ne (i32.load8_u (global.get $tj_pos)) (i32.const 92)) (i32.ne (i32.load8_u offset=1 (global.get $tj_pos)) (i32.const 117))))
+                (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+              (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 2)))
+              (local.set $lo (call $tj_hex4))
+              (if (i32.or (i32.lt_s (local.get $lo) (i32.const 0)) (i32.or (i32.lt_u (local.get $lo) (i32.const 0xdc00)) (i32.gt_u (local.get $lo) (i32.const 0xdfff))))
+                (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+              (local.set $cp (i32.add (i32.const 0x10000) (i32.or (i32.shl (i32.sub (local.get $cp) (i32.const 0xd800)) (i32.const 10)) (i32.sub (local.get $lo) (i32.const 0xdc00)))))))
+          (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0xdc00)) (i32.le_u (local.get $cp) (i32.const 0xdfff)))
+            (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))))
+      (if (i32.lt_s (local.get $cp) (i32.const 0))
+        (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (i32.sub (global.get $tj_pos) (i32.const 1))))))
+      (local.set $s (call $tj_emit_utf8 (local.get $cp)))
+      (if (local.get $s) (then (return (local.get $s))))
+      (br $l)))
+    ;; header: move the body under it
+    (local.set $len (i32.sub (global.get $tj_cur) (local.get $body)))
+    (if (i32.lt_u (local.get $len) (i32.const 32))
+      (then
+        (i32.store8 (i32.add (global.get $tj_out) (local.get $start)) (i32.or (i32.const 0xa0) (local.get $len)))
+        (local.set $size (i32.const 1)))
+      (else
+        (if (i32.lt_u (local.get $len) (i32.const 256))
+          (then
+            (i32.store8 (i32.add (global.get $tj_out) (local.get $start)) (i32.const 0xd9))
+            (i32.store8 (i32.add (global.get $tj_out) (i32.add (local.get $start) (i32.const 1))) (local.get $len))
+            (local.set $size (i32.const 2)))
+          (else
+            (if (i32.lt_u (local.get $len) (i32.const 65536))
+              (then
+                (i32.store8 (i32.add (global.get $tj_out) (local.get $start)) (i32.const 0xda))
+                (i32.store8 (i32.add (global.get $tj_out) (i32.add (local.get $start) (i32.const 1))) (i32.shr_u (local.get $len) (i32.const 8)))
+                (i32.store8 (i32.add (global.get $tj_out) (i32.add (local.get $start) (i32.const 2))) (local.get $len))
+                (local.set $size (i32.const 3)))
+              (else
+                (i32.store8 (i32.add (global.get $tj_out) (local.get $start)) (i32.const 0xdb))
+                (drop (call $mpw_u32be (global.get $tj_out) (global.get $tj_cap) (i32.add (local.get $start) (i32.const 1)) (local.get $len)))
+                (local.set $size (i32.const 5))))))))
+    (if (i32.ne (local.get $size) (i32.const 5))
+      (then
+        (memory.copy (i32.add (global.get $tj_out) (i32.add (local.get $start) (local.get $size)))
+                     (i32.add (global.get $tj_out) (local.get $body)) (local.get $len))
+        (global.set $tj_cur (i32.sub (global.get $tj_cur) (i32.sub (i32.const 5) (local.get $size))))))
+    (i32.const 0))
+
+  (func $tj_hex4 (result i32)
+    (local $i i32) (local $b i32) (local $v i32) (local $d i32)
+    (if (i32.gt_u (i32.add (global.get $tj_pos) (i32.const 4)) (global.get $tj_end)) (then (return (i32.const -1))))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 4)))
+      (local.set $b (i32.load8_u (i32.add (global.get $tj_pos) (local.get $i))))
+      (local.set $d (i32.const -1))
+      (if (i32.and (i32.ge_u (local.get $b) (i32.const 48)) (i32.le_u (local.get $b) (i32.const 57))) (then (local.set $d (i32.sub (local.get $b) (i32.const 48)))))
+      (if (i32.and (i32.ge_u (local.get $b) (i32.const 97)) (i32.le_u (local.get $b) (i32.const 102))) (then (local.set $d (i32.sub (local.get $b) (i32.const 87)))))
+      (if (i32.and (i32.ge_u (local.get $b) (i32.const 65)) (i32.le_u (local.get $b) (i32.const 70))) (then (local.set $d (i32.sub (local.get $b) (i32.const 55)))))
+      (if (i32.lt_s (local.get $d) (i32.const 0)) (then (return (i32.const -1))))
+      (local.set $v (i32.or (i32.shl (local.get $v) (i32.const 4)) (local.get $d)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 4)))
+    (local.get $v))
+
+  (func $tj_emit_utf8 (param $cp i32) (result i32)
+    (local $s i32)
+    (if (i32.lt_u (local.get $cp) (i32.const 0x80)) (then (return (call $tj_emit (local.get $cp)))))
+    (if (i32.lt_u (local.get $cp) (i32.const 0x800))
+      (then
+        (local.set $s (call $tj_emit (i32.or (i32.const 0xc0) (i32.shr_u (local.get $cp) (i32.const 6)))))
+        (if (local.get $s) (then (return (local.get $s))))
+        (return (call $tj_emit (i32.or (i32.const 0x80) (i32.and (local.get $cp) (i32.const 0x3f)))))))
+    (if (i32.lt_u (local.get $cp) (i32.const 0x10000))
+      (then
+        (local.set $s (call $tj_emit (i32.or (i32.const 0xe0) (i32.shr_u (local.get $cp) (i32.const 12)))))
+        (if (local.get $s) (then (return (local.get $s))))
+        (local.set $s (call $tj_emit (i32.or (i32.const 0x80) (i32.and (i32.shr_u (local.get $cp) (i32.const 6)) (i32.const 0x3f)))))
+        (if (local.get $s) (then (return (local.get $s))))
+        (return (call $tj_emit (i32.or (i32.const 0x80) (i32.and (local.get $cp) (i32.const 0x3f)))))))
+    (local.set $s (call $tj_emit (i32.or (i32.const 0xf0) (i32.shr_u (local.get $cp) (i32.const 18)))))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $tj_emit (i32.or (i32.const 0x80) (i32.and (i32.shr_u (local.get $cp) (i32.const 12)) (i32.const 0x3f)))))
+    (if (local.get $s) (then (return (local.get $s))))
+    (local.set $s (call $tj_emit (i32.or (i32.const 0x80) (i32.and (i32.shr_u (local.get $cp) (i32.const 6)) (i32.const 0x3f)))))
+    (if (local.get $s) (then (return (local.get $s))))
+    (call $tj_emit (i32.or (i32.const 0x80) (i32.and (local.get $cp) (i32.const 0x3f)))))
+
+  ;; Exact powers of ten up to 1e22.
+  (func $tj_pow10 (param $e i32) (result f64)
+    (local $r f64)
+    (local.set $r (f64.const 1))
+    (block $done (loop $l
+      (br_if $done (i32.eqz (local.get $e)))
+      (local.set $r (f64.mul (local.get $r) (f64.const 10)))
+      (local.set $e (i32.sub (local.get $e) (i32.const 1)))
+      (br $l)))
+    (local.get $r))
+
+  ;; JSON number → the value JSON.parse yields, encoded the way
+  ;; membrane/msgpack.js encodes that JS number.
+  (func $tj_number (result i32)
+    (local $at i32) (local $neg i32) (local $b i32) (local $mant i64) (local $digits i32) (local $frac_digits i32) (local $exp i32)
+    (local $exp_neg i32) (local $exp_val i32) (local $v f64) (local $scale i32) (local $i i64) (local $any i32) (local $cur i32) (local $bits i64)
+    (local.set $at (global.get $tj_pos))
+    (if (i32.eq (i32.load8_u (global.get $tj_pos)) (i32.const 45))
+      (then (local.set $neg (i32.const 1)) (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))))
+    (if (i32.ge_u (global.get $tj_pos) (global.get $tj_end)) (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+    (local.set $b (i32.load8_u (global.get $tj_pos)))
+    (if (i32.eqz (i32.and (i32.ge_u (local.get $b) (i32.const 48)) (i32.le_u (local.get $b) (i32.const 57))))
+      (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+    ;; integer part (a leading zero must stand alone)
+    (if (i32.eq (local.get $b) (i32.const 48))
+      (then
+        (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+        (if (i32.lt_u (global.get $tj_pos) (global.get $tj_end))
+          (then
+            (local.set $b (i32.load8_u (global.get $tj_pos)))
+            (if (i32.and (i32.ge_u (local.get $b) (i32.const 48)) (i32.le_u (local.get $b) (i32.const 57)))
+              (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos))))))))
+      (else
+        (block $id (loop $il
+          (br_if $id (i32.ge_u (global.get $tj_pos) (global.get $tj_end)))
+          (local.set $b (i32.load8_u (global.get $tj_pos)))
+          (br_if $id (i32.eqz (i32.and (i32.ge_u (local.get $b) (i32.const 48)) (i32.le_u (local.get $b) (i32.const 57)))))
+          (if (i32.or (local.get $any) (i32.ne (local.get $b) (i32.const 48)))
+            (then
+              (local.set $any (i32.const 1))
+              (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+              (if (i32.le_u (local.get $digits) (i32.const 18))
+                (then (local.set $mant (i64.add (i64.mul (local.get $mant) (i64.const 10)) (i64.extend_i32_u (i32.sub (local.get $b) (i32.const 48))))))
+                (else (local.set $scale (i32.add (local.get $scale) (i32.const 1)))))))
+          (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+          (br $il)))))
+    ;; fraction
+    (if (i32.and (i32.lt_u (global.get $tj_pos) (global.get $tj_end)) (i32.eq (i32.load8_u (global.get $tj_pos)) (i32.const 46)))
+      (then
+        (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+        (local.set $frac_digits (i32.const 0))
+        (block $fd (loop $fl
+          (br_if $fd (i32.ge_u (global.get $tj_pos) (global.get $tj_end)))
+          (local.set $b (i32.load8_u (global.get $tj_pos)))
+          (br_if $fd (i32.eqz (i32.and (i32.ge_u (local.get $b) (i32.const 48)) (i32.le_u (local.get $b) (i32.const 57)))))
+          (local.set $frac_digits (i32.add (local.get $frac_digits) (i32.const 1)))
+          (if (i32.or (local.get $any) (i32.ne (local.get $b) (i32.const 48)))
+            (then
+              (local.set $any (i32.const 1))
+              (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+              (if (i32.le_u (local.get $digits) (i32.const 18))
+                (then
+                  (local.set $mant (i64.add (i64.mul (local.get $mant) (i64.const 10)) (i64.extend_i32_u (i32.sub (local.get $b) (i32.const 48)))))
+                  (local.set $scale (i32.sub (local.get $scale) (i32.const 1))))))
+            (else (local.set $scale (i32.sub (local.get $scale) (i32.const 1)))))
+          (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+          (br $fl)))
+        (if (i32.eqz (local.get $frac_digits)) (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))))
+    ;; exponent
+    (if (i32.and (i32.lt_u (global.get $tj_pos) (global.get $tj_end))
+                 (i32.or (i32.eq (i32.load8_u (global.get $tj_pos)) (i32.const 101)) (i32.eq (i32.load8_u (global.get $tj_pos)) (i32.const 69))))
+      (then
+        (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+        (if (i32.lt_u (global.get $tj_pos) (global.get $tj_end))
+          (then
+            (local.set $b (i32.load8_u (global.get $tj_pos)))
+            (if (i32.or (i32.eq (local.get $b) (i32.const 43)) (i32.eq (local.get $b) (i32.const 45)))
+              (then
+                (local.set $exp_neg (i32.eq (local.get $b) (i32.const 45)))
+                (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))))))
+        (local.set $exp (i32.const 0))
+        (block $ed (loop $el
+          (br_if $ed (i32.ge_u (global.get $tj_pos) (global.get $tj_end)))
+          (local.set $b (i32.load8_u (global.get $tj_pos)))
+          (br_if $ed (i32.eqz (i32.and (i32.ge_u (local.get $b) (i32.const 48)) (i32.le_u (local.get $b) (i32.const 57)))))
+          (local.set $exp (i32.add (local.get $exp) (i32.const 1)))
+          (if (i32.lt_u (local.get $exp_val) (i32.const 100000))
+            (then (local.set $exp_val (i32.add (i32.mul (local.get $exp_val) (i32.const 10)) (i32.sub (local.get $b) (i32.const 48))))))
+          (global.set $tj_pos (i32.add (global.get $tj_pos) (i32.const 1)))
+          (br $el)))
+        (if (i32.eqz (local.get $exp)) (then (return (call $tj_fail (global.get $STATUS_SYNTAX_ERROR) (global.get $tj_pos)))))
+        (local.set $scale (i32.add (local.get $scale) (select (i32.sub (i32.const 0) (local.get $exp_val)) (local.get $exp_val) (local.get $exp_neg))))))
+    ;; the value: zero mantissa is exact; otherwise the fast path only
+    (if (i32.eqz (local.get $any))
+      (then (local.set $v (f64.const 0)) (local.set $scale (i32.const 0)))
+      (else
+        ;; an integer of up to 18 digits converts with one rounding (exact);
+        ;; a scaled mantissa must fit 2^53 for the multiply/divide to be exact
+        (if (i32.or (i32.gt_u (local.get $digits) (i32.const 18))
+                    (i32.or (i32.and (i32.gt_u (local.get $digits) (i32.const 15)) (i32.ne (local.get $scale) (i32.const 0)))
+                            (i32.or (i32.gt_s (local.get $scale) (i32.const 22)) (i32.lt_s (local.get $scale) (i32.const -22)))))
+          (then (return (call $tj_fail (global.get $STATUS_UNSUPPORTED) (local.get $at)))))
+        (local.set $v (f64.convert_i64_u (local.get $mant)))
+        (if (i32.gt_s (local.get $scale) (i32.const 0))
+          (then (local.set $v (f64.mul (local.get $v) (call $tj_pow10 (local.get $scale)))))
+          (else (local.set $v (f64.div (local.get $v) (call $tj_pow10 (i32.sub (i32.const 0) (local.get $scale)))))))))
+    (if (local.get $neg) (then (local.set $v (f64.neg (local.get $v)))))
+    ;; encode: an integral value inside int64 → integer forms, else float64.
+    ;; JSON.parse gives -0 for "-0"; Number.isInteger(-0) holds and the
+    ;; encoder emits the integer 0.
+    (if (i32.and (f64.eq (local.get $v) (f64.nearest (local.get $v)))
+                 (i32.and (f64.ge (local.get $v) (f64.const -9223372036854775808)) (f64.lt (local.get $v) (f64.const 18446744073709551616))))
+      (then
+        (if (f64.ge (local.get $v) (f64.const 0))
+          (then
+            (local.set $i (i64.trunc_f64_u (local.get $v)))
+            (if (i64.le_u (local.get $i) (i64.const 0xffffffff))
+              (then
+                (local.set $cur (call $mpw_uint (global.get $tj_out) (global.get $tj_cap) (global.get $tj_cur) (i32.wrap_i64 (local.get $i))))
+                (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (call $tj_fail (global.get $STATUS_BUFFER_TOO_SMALL) (local.get $at)))))
+                (global.set $tj_cur (local.get $cur))
+                (return (i32.const 0))))
+            (local.set $cur (call $tj_emit (i32.const 0xcf)))
+            (if (local.get $cur) (then (return (local.get $cur))))
+            (return (call $tj_emit_i64 (local.get $i))))
+          (else
+            (local.set $i (i64.trunc_f64_s (local.get $v)))
+            (if (i64.ge_s (local.get $i) (i64.const -32))
+              (then (return (call $tj_emit (i32.and (i32.wrap_i64 (local.get $i)) (i32.const 0xff))))))
+            (if (i64.ge_s (local.get $i) (i64.const -128))
+              (then
+                (local.set $cur (call $tj_emit (i32.const 0xd0)))
+                (if (local.get $cur) (then (return (local.get $cur))))
+                (return (call $tj_emit (i32.and (i32.wrap_i64 (local.get $i)) (i32.const 0xff))))))
+            (if (i64.ge_s (local.get $i) (i64.const -32768))
+              (then
+                (local.set $cur (call $tj_emit (i32.const 0xd1)))
+                (if (local.get $cur) (then (return (local.get $cur))))
+                (local.set $cur (call $tj_emit (i32.and (i32.shr_u (i32.wrap_i64 (local.get $i)) (i32.const 8)) (i32.const 0xff))))
+                (if (local.get $cur) (then (return (local.get $cur))))
+                (return (call $tj_emit (i32.and (i32.wrap_i64 (local.get $i)) (i32.const 0xff))))))
+            (if (i64.ge_s (local.get $i) (i64.const -2147483648))
+              (then
+                (local.set $cur (call $tj_emit (i32.const 0xd2)))
+                (if (local.get $cur) (then (return (local.get $cur))))
+                (return (call $tj_emit_u32 (i32.wrap_i64 (local.get $i))))))
+            (local.set $cur (call $tj_emit (i32.const 0xd3)))
+            (if (local.get $cur) (then (return (local.get $cur))))
+            (return (call $tj_emit_i64 (local.get $i)))))))
+    ;; float64 big-endian
+    (local.set $cur (call $tj_emit (i32.const 0xcb)))
+    (if (local.get $cur) (then (return (local.get $cur))))
+    (call $tj_emit_i64 (i64.reinterpret_f64 (local.get $v))))
+
+  (func $tj_emit_i64 (param $v i64) (result i32)
+    (local $s i32)
+    (local.set $s (call $tj_emit_u32 (i32.wrap_i64 (i64.shr_u (local.get $v) (i64.const 32)))))
+    (if (local.get $s) (then (return (local.get $s))))
+    (call $tj_emit_u32 (i32.wrap_i64 (local.get $v))))
+
+  ;; ==========================================================================
+  ;; Formats. Each validator takes (addr, len) over UTF-8 bytes and returns
+  ;; 1 valid, 0 invalid, or a negative status. -2 (FORMAT_NEEDS_IDNA) marks
+  ;; an instance whose verdict needs the IDNA tables (idn labels); the VM
+  ;; reports it as UNSUPPORTED rather than guessing.
+  ;; Each scanner loop visit is a work unit, including exits/refusals.
+  ;; Nested scans and punycode insertion shifts are separate performed work;
+  ;; no charge assumes that an unvisited suffix was examined.
+  ;; ==========================================================================
+
+  (global $FMT_DATE_TIME i32 (i32.const 1))
+  (global $FMT_DATE i32 (i32.const 2))
+  (global $FMT_TIME i32 (i32.const 3))
+  (global $FMT_DURATION i32 (i32.const 4))
+  (global $FMT_EMAIL i32 (i32.const 5))
+  (global $FMT_IDN_EMAIL i32 (i32.const 6))
+  (global $FMT_HOSTNAME i32 (i32.const 7))
+  (global $FMT_IDN_HOSTNAME i32 (i32.const 8))
+  (global $FMT_IPV4 i32 (i32.const 9))
+  (global $FMT_IPV6 i32 (i32.const 10))
+  (global $FMT_URI i32 (i32.const 11))
+  (global $FMT_URI_REFERENCE i32 (i32.const 12))
+  (global $FMT_IRI i32 (i32.const 13))
+  (global $FMT_IRI_REFERENCE i32 (i32.const 14))
+  (global $FMT_URI_TEMPLATE i32 (i32.const 15))
+  (global $FMT_UUID i32 (i32.const 16))
+  (global $FMT_JSON_POINTER i32 (i32.const 17))
+  (global $FMT_RELATIVE_JSON_POINTER i32 (i32.const 18))
+  (global $FMT_REGEX i32 (i32.const 19))
+  (global $FMT_COUNT i32 (i32.const 19))
+  (global $FORMAT_NEEDS_IDNA i32 (i32.const -2))
+
+  (data $formats
+    "date-time\00date\00time\00duration\00email\00idn-email\00hostname\00"
+    "idn-hostname\00ipv4\00ipv6\00uri\00uri-reference\00iri\00iri-reference\00"
+    "uri-template\00uuid\00json-pointer\00relative-json-pointer\00regex\00\00")
+  (global $FORMATS_BYTES i32 (i32.const 172))
+  (global $CW_FORMAT_TABLE i32 (i32.const 1280))
+  (global $CW_FORMAT_INDEX i32 (i32.const 1472))
+
+  (func $is_digit (param $b i32) (result i32)
+    (i32.and (i32.ge_u (local.get $b) (i32.const 48)) (i32.le_u (local.get $b) (i32.const 57))))
+  (func $is_alpha (param $b i32) (result i32)
+    (i32.or (i32.and (i32.ge_u (local.get $b) (i32.const 65)) (i32.le_u (local.get $b) (i32.const 90)))
+            (i32.and (i32.ge_u (local.get $b) (i32.const 97)) (i32.le_u (local.get $b) (i32.const 122)))))
+  (func $is_alnum (param $b i32) (result i32)
+    (i32.or (call $is_digit (local.get $b)) (call $is_alpha (local.get $b))))
+  (func $is_hex (param $b i32) (result i32)
+    (i32.ge_s (call $hex_value (local.get $b)) (i32.const 0)))
+  (func $byte_at (param $addr i32) (param $end i32) (param $i i32) (result i32)
+    (if (i32.ge_u (i32.add (local.get $addr) (local.get $i)) (local.get $end)) (then (return (i32.const -1))))
+    (i32.load8_u (i32.add (local.get $addr) (local.get $i))))
+  ;; two ASCII digits at addr → 0..99, or -1
+  (func $two_digits (param $addr i32) (param $end i32) (result i32)
+    (local $a i32) (local $b i32)
+    (local.set $a (call $byte_at (local.get $addr) (local.get $end) (i32.const 0)))
+    (local.set $b (call $byte_at (local.get $addr) (local.get $end) (i32.const 1)))
+    (if (i32.or (i32.eqz (call $is_digit (local.get $a))) (i32.eqz (call $is_digit (local.get $b)))) (then (return (i32.const -1))))
+    (i32.add (i32.mul (i32.sub (local.get $a) (i32.const 48)) (i32.const 10)) (i32.sub (local.get $b) (i32.const 48))))
+  (func $leap_year (param $y i32) (result i32)
+    (i32.and (i32.eqz (i32.rem_u (local.get $y) (i32.const 4)))
+             (i32.or (i32.ne (i32.rem_u (local.get $y) (i32.const 100)) (i32.const 0))
+                     (i32.eqz (i32.rem_u (local.get $y) (i32.const 400))))))
+  (func $days_in_month (param $y i32) (param $m i32) (result i32)
+    (if (i32.eq (local.get $m) (i32.const 2)) (then (return (i32.add (i32.const 28) (call $leap_year (local.get $y))))))
+    (if (i32.or (i32.or (i32.eq (local.get $m) (i32.const 4)) (i32.eq (local.get $m) (i32.const 6)))
+                (i32.or (i32.eq (local.get $m) (i32.const 9)) (i32.eq (local.get $m) (i32.const 11))))
+      (then (return (i32.const 30))))
+    (i32.const 31))
+
+  ;; full-date at addr (exactly 10 bytes checked; caller checks length)
+  (func $parse_full_date (param $addr i32) (param $end i32) (result i32)
+    (local $y i32) (local $m i32) (local $d i32) (local $i i32)
+    (local.set $i (i32.const 0))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 4)))
+      (if (i32.eqz (call $is_digit (call $byte_at (local.get $addr) (local.get $end) (local.get $i)))) (then (return (i32.const 0))))
+      (local.set $y (i32.add (i32.mul (local.get $y) (i32.const 10)) (i32.sub (call $byte_at (local.get $addr) (local.get $end) (local.get $i)) (i32.const 48))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (if (i32.ne (call $byte_at (local.get $addr) (local.get $end) (i32.const 4)) (i32.const 45)) (then (return (i32.const 0))))
+    (local.set $m (call $two_digits (i32.add (local.get $addr) (i32.const 5)) (local.get $end)))
+    (if (i32.ne (call $byte_at (local.get $addr) (local.get $end) (i32.const 7)) (i32.const 45)) (then (return (i32.const 0))))
+    (local.set $d (call $two_digits (i32.add (local.get $addr) (i32.const 8)) (local.get $end)))
+    (if (i32.or (i32.lt_s (local.get $m) (i32.const 1)) (i32.gt_s (local.get $m) (i32.const 12))) (then (return (i32.const 0))))
+    (if (i32.or (i32.lt_s (local.get $d) (i32.const 1)) (i32.gt_s (local.get $d) (call $days_in_month (local.get $y) (local.get $m)))) (then (return (i32.const 0))))
+    (i32.const 1))
+
+  (func $fmt_date (param $addr i32) (param $len i32) (result i32)
+    (if (i32.ne (local.get $len) (i32.const 10)) (then (return (i32.const 0))))
+    (call $parse_full_date (local.get $addr) (i32.add (local.get $addr) (local.get $len))))
+
+  ;; full-time at addr..end: HH:MM:SS[.frac](Z|±HH:MM). Returns 1/0.
+  (func $parse_full_time (param $addr i32) (param $end i32) (result i32)
+    (local $h i32) (local $m i32) (local $s i32) (local $p i32) (local $b i32) (local $oh i32) (local $om i32) (local $sign i32) (local $utc i32)
+    (local.set $h (call $two_digits (local.get $addr) (local.get $end)))
+    (if (i32.ne (call $byte_at (local.get $addr) (local.get $end) (i32.const 2)) (i32.const 58)) (then (return (i32.const 0))))
+    (local.set $m (call $two_digits (i32.add (local.get $addr) (i32.const 3)) (local.get $end)))
+    (if (i32.ne (call $byte_at (local.get $addr) (local.get $end) (i32.const 5)) (i32.const 58)) (then (return (i32.const 0))))
+    (local.set $s (call $two_digits (i32.add (local.get $addr) (i32.const 6)) (local.get $end)))
+    (if (i32.or (i32.lt_s (local.get $h) (i32.const 0)) (i32.gt_s (local.get $h) (i32.const 23))) (then (return (i32.const 0))))
+    (if (i32.or (i32.lt_s (local.get $m) (i32.const 0)) (i32.gt_s (local.get $m) (i32.const 59))) (then (return (i32.const 0))))
+    (if (i32.or (i32.lt_s (local.get $s) (i32.const 0)) (i32.gt_s (local.get $s) (i32.const 60))) (then (return (i32.const 0))))
+    (local.set $p (i32.const 8))
+    (if (i32.eq (call $byte_at (local.get $addr) (local.get $end) (local.get $p)) (i32.const 46))
+      (then
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (if (i32.eqz (call $is_digit (call $byte_at (local.get $addr) (local.get $end) (local.get $p)))) (then (return (i32.const 0))))
+        (block $fd (loop $fl
+          (call $work_add (i32.const 1))
+          (br_if $fd (i32.eqz (call $is_digit (call $byte_at (local.get $addr) (local.get $end) (local.get $p)))))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $fl)))))
+    (local.set $b (call $byte_at (local.get $addr) (local.get $end) (local.get $p)))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 90)) (i32.eq (local.get $b) (i32.const 122)))
+      (then
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (local.set $sign (i32.const 0)))
+      (else
+        (if (i32.eq (local.get $b) (i32.const 43)) (then (local.set $sign (i32.const 1)))
+          (else (if (i32.eq (local.get $b) (i32.const 45)) (then (local.set $sign (i32.const -1)))
+            (else (return (i32.const 0))))))
+        (local.set $oh (call $two_digits (i32.add (local.get $addr) (i32.add (local.get $p) (i32.const 1))) (local.get $end)))
+        (if (i32.ne (call $byte_at (local.get $addr) (local.get $end) (i32.add (local.get $p) (i32.const 3))) (i32.const 58)) (then (return (i32.const 0))))
+        (local.set $om (call $two_digits (i32.add (local.get $addr) (i32.add (local.get $p) (i32.const 4))) (local.get $end)))
+        (if (i32.or (i32.lt_s (local.get $oh) (i32.const 0)) (i32.gt_s (local.get $oh) (i32.const 23))) (then (return (i32.const 0))))
+        (if (i32.or (i32.lt_s (local.get $om) (i32.const 0)) (i32.gt_s (local.get $om) (i32.const 59))) (then (return (i32.const 0))))
+        (local.set $p (i32.add (local.get $p) (i32.const 6)))))
+    (if (i32.ne (i32.add (local.get $addr) (local.get $p)) (local.get $end)) (then (return (i32.const 0))))
+    ;; a leap second must be 23:59:60 in UTC
+    (if (i32.eq (local.get $s) (i32.const 60))
+      (then
+        (local.set $utc (i32.sub (i32.add (i32.mul (local.get $h) (i32.const 60)) (local.get $m))
+                                 (i32.mul (local.get $sign) (i32.add (i32.mul (local.get $oh) (i32.const 60)) (local.get $om)))))
+        (local.set $utc (i32.rem_s (i32.add (local.get $utc) (i32.const 2880)) (i32.const 1440)))
+        (if (i32.ne (local.get $utc) (i32.const 1439)) (then (return (i32.const 0))))))
+    (i32.const 1))
+
+  (func $fmt_time (param $addr i32) (param $len i32) (result i32)
+    (if (i32.lt_u (local.get $len) (i32.const 9)) (then (return (i32.const 0))))
+    (call $parse_full_time (local.get $addr) (i32.add (local.get $addr) (local.get $len))))
+
+  (func $fmt_date_time (param $addr i32) (param $len i32) (result i32)
+    (local $end i32) (local $b i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    (if (i32.lt_u (local.get $len) (i32.const 20)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $parse_full_date (local.get $addr) (local.get $end))) (then (return (i32.const 0))))
+    (local.set $b (i32.load8_u offset=10 (local.get $addr)))
+    (if (i32.eqz (i32.or (i32.eq (local.get $b) (i32.const 84)) (i32.eq (local.get $b) (i32.const 116)))) (then (return (i32.const 0))))
+    (call $parse_full_time (i32.add (local.get $addr) (i32.const 11)) (local.get $end)))
+
+  ;; RFC 3339 Appendix A duration (no fractions).
+  (func $fmt_duration (param $addr i32) (param $len i32) (result i32)
+    (local $end i32) (local $p i32) (local $b i32) (local $had_digits i32) (local $date_units i32) (local $time_units i32)
+    (local $last i32) (local $unit i32) (local $in_time i32) (local $week i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    (if (i32.lt_u (local.get $len) (i32.const 3)) (then (return (i32.const 0))))
+    (if (i32.ne (i32.load8_u (local.get $addr)) (i32.const 80)) (then (return (i32.const 0))))
+    (local.set $p (i32.const 1))
+    ;; last unit rank: date Y=1 M=2 D=3, time H=1 M=2 S=3; a unit may only
+    ;; follow the immediately preceding rank (RFC 3339 chains them)
+    (local.set $last (i32.const 0))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (i32.add (local.get $addr) (local.get $p)) (local.get $end)))
+      (local.set $b (i32.load8_u (i32.add (local.get $addr) (local.get $p))))
+      (if (i32.eq (local.get $b) (i32.const 84))
+        (then
+          (if (local.get $had_digits) (then (return (i32.const 0))))
+          (if (i32.or (local.get $in_time) (local.get $week)) (then (return (i32.const 0))))
+          (local.set $in_time (i32.const 1))
+          (local.set $last (i32.const 0))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $l)))
+      (if (call $is_digit (local.get $b))
+        (then
+          (local.set $had_digits (i32.const 1))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $l)))
+      (if (i32.eqz (local.get $had_digits)) (then (return (i32.const 0))))
+      (local.set $had_digits (i32.const 0))
+      (local.set $unit (i32.const 0))
+      (if (local.get $in_time)
+        (then
+          (if (i32.eq (local.get $b) (i32.const 72)) (then (local.set $unit (i32.const 1))))
+          (if (i32.eq (local.get $b) (i32.const 77)) (then (local.set $unit (i32.const 2))))
+          (if (i32.eq (local.get $b) (i32.const 83)) (then (local.set $unit (i32.const 3))))
+          (if (i32.eqz (local.get $unit)) (then (return (i32.const 0))))
+          ;; H, then optionally M, then optionally S: rank must be exactly last+1 or start a chain
+          (if (i32.and (local.get $last) (i32.ne (local.get $unit) (i32.add (local.get $last) (i32.const 1)))) (then (return (i32.const 0))))
+          (local.set $last (local.get $unit))
+          (local.set $time_units (i32.add (local.get $time_units) (i32.const 1))))
+        (else
+          (if (i32.eq (local.get $b) (i32.const 87))
+            (then
+              (if (i32.or (local.get $date_units) (local.get $week)) (then (return (i32.const 0))))
+              (local.set $week (i32.const 1))
+              (local.set $p (i32.add (local.get $p) (i32.const 1)))
+              (br $l)))
+          (if (local.get $week) (then (return (i32.const 0))))
+          (if (i32.eq (local.get $b) (i32.const 89)) (then (local.set $unit (i32.const 1))))
+          (if (i32.eq (local.get $b) (i32.const 77)) (then (local.set $unit (i32.const 2))))
+          (if (i32.eq (local.get $b) (i32.const 68)) (then (local.set $unit (i32.const 3))))
+          (if (i32.eqz (local.get $unit)) (then (return (i32.const 0))))
+          (if (i32.and (local.get $last) (i32.ne (local.get $unit) (i32.add (local.get $last) (i32.const 1)))) (then (return (i32.const 0))))
+          (local.set $last (local.get $unit))
+          (local.set $date_units (i32.add (local.get $date_units) (i32.const 1)))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $l)))
+    (if (local.get $had_digits) (then (return (i32.const 0))))
+    (if (i32.and (local.get $in_time) (i32.eqz (local.get $time_units))) (then (return (i32.const 0))))
+    (if (i32.eqz (i32.or (i32.or (local.get $date_units) (local.get $time_units)) (local.get $week))) (then (return (i32.const 0))))
+    (i32.const 1))
+
+  ;; dotted-quad IPv4 in [addr, end): strict decimal, no leading zeros.
+  (func $parse_ipv4 (param $addr i32) (param $end i32) (result i32)
+    (local $p i32) (local $octets i32) (local $v i32) (local $digits i32) (local $b i32)
+    (local.set $p (local.get $addr))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (local.set $v (i32.const 0)) (local.set $digits (i32.const 0))
+      (block $nd (loop $dl
+        (call $work_add (i32.const 1))
+        (br_if $nd (i32.ge_u (local.get $p) (local.get $end)))
+        (local.set $b (i32.load8_u (local.get $p)))
+        (br_if $nd (i32.eqz (call $is_digit (local.get $b))))
+        (if (i32.and (i32.eq (local.get $digits) (i32.const 1)) (i32.eqz (local.get $v))) (then (return (i32.const 0))))
+        (local.set $v (i32.add (i32.mul (local.get $v) (i32.const 10)) (i32.sub (local.get $b) (i32.const 48))))
+        (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+        (if (i32.gt_u (local.get $digits) (i32.const 3)) (then (return (i32.const 0))))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (br $dl)))
+      (if (i32.or (i32.eqz (local.get $digits)) (i32.gt_u (local.get $v) (i32.const 255))) (then (return (i32.const 0))))
+      (local.set $octets (i32.add (local.get $octets) (i32.const 1)))
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (if (i32.ne (i32.load8_u (local.get $p)) (i32.const 46)) (then (return (i32.const 0))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (if (i32.gt_u (local.get $octets) (i32.const 3)) (then (return (i32.const 0))))
+      (br $l)))
+    (i32.eq (local.get $octets) (i32.const 4)))
+
+  (func $fmt_ipv4 (param $addr i32) (param $len i32) (result i32)
+    (if (i32.eqz (local.get $len)) (then (return (i32.const 0))))
+    (call $parse_ipv4 (local.get $addr) (i32.add (local.get $addr) (local.get $len))))
+
+  ;; RFC 4291 text form with optional embedded IPv4, no zone.
+  (func $parse_ipv6 (param $addr i32) (param $end i32) (result i32)
+    (local $p i32) (local $groups i32) (local $compressed i32) (local $hex i32) (local $b i32) (local $start i32) (local $q i32) (local $has_dot i32)
+    (local.set $p (local.get $addr))
+    (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+    ;; leading "::"
+    (if (i32.eq (i32.load8_u (local.get $p)) (i32.const 58))
+      (then
+        (if (i32.ne (call $byte_at (local.get $p) (local.get $end) (i32.const 1)) (i32.const 58)) (then (return (i32.const 0))))
+        (local.set $compressed (i32.const 1))
+        (local.set $p (i32.add (local.get $p) (i32.const 2)))
+        (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 1))))))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      ;; a group: 1-4 hex digits, or an IPv4 tail
+      (local.set $start (local.get $p))
+      (local.set $hex (i32.const 0))
+      (local.set $has_dot (i32.const 0))
+      (local.set $q (local.get $p))
+      (block $sd (loop $sl
+        (call $work_add (i32.const 1))
+        (br_if $sd (i32.ge_u (local.get $q) (local.get $end)))
+        (local.set $b (i32.load8_u (local.get $q)))
+        (br_if $sd (i32.eq (local.get $b) (i32.const 58)))
+        (if (i32.eq (local.get $b) (i32.const 46)) (then (local.set $has_dot (i32.const 1))))
+        (local.set $q (i32.add (local.get $q) (i32.const 1)))
+        (br $sl)))
+      (if (local.get $has_dot)
+        (then
+          (if (i32.ne (local.get $q) (local.get $end)) (then (return (i32.const 0))))
+          (if (i32.eqz (call $parse_ipv4 (local.get $start) (local.get $end))) (then (return (i32.const 0))))
+          (local.set $groups (i32.add (local.get $groups) (i32.const 2)))
+          (local.set $p (local.get $end))
+          (br $done)))
+      (block $hd (loop $hl
+        (call $work_add (i32.const 1))
+        (br_if $hd (i32.ge_u (local.get $p) (local.get $q)))
+        (if (i32.eqz (call $is_hex (i32.load8_u (local.get $p)))) (then (return (i32.const 0))))
+        (local.set $hex (i32.add (local.get $hex) (i32.const 1)))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (br $hl)))
+      (if (i32.or (i32.eqz (local.get $hex)) (i32.gt_u (local.get $hex) (i32.const 4))) (then (return (i32.const 0))))
+      (local.set $groups (i32.add (local.get $groups) (i32.const 1)))
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      ;; separator
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+      (if (i32.eq (i32.load8_u (local.get $p)) (i32.const 58))
+        (then
+          (if (local.get $compressed) (then (return (i32.const 0))))
+          (local.set $compressed (i32.const 1))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br_if $done (i32.ge_u (local.get $p) (local.get $end)))))
+      (br $l)))
+    (if (local.get $compressed)
+      (then (return (i32.lt_u (local.get $groups) (i32.const 8))))
+      (else (return (i32.eq (local.get $groups) (i32.const 8)))))
+    (i32.const 0))
+
+  (func $fmt_ipv6 (param $addr i32) (param $len i32) (result i32)
+    (call $parse_ipv6 (local.get $addr) (i32.add (local.get $addr) (local.get $len))))
+
+  ;; --- punycode (RFC 3492) decode of an A-label body into scalars written
+  ;; to $out (u32 each, capacity $cap). Returns scalar count or -1.
+  (func $punycode_digit (param $b i32) (result i32)
+    (if (i32.and (i32.ge_u (local.get $b) (i32.const 48)) (i32.le_u (local.get $b) (i32.const 57))) (then (return (i32.add (local.get $b) (i32.const -22)))))
+    (if (i32.and (i32.ge_u (local.get $b) (i32.const 65)) (i32.le_u (local.get $b) (i32.const 90))) (then (return (i32.sub (local.get $b) (i32.const 65)))))
+    (if (i32.and (i32.ge_u (local.get $b) (i32.const 97)) (i32.le_u (local.get $b) (i32.const 122))) (then (return (i32.sub (local.get $b) (i32.const 97)))))
+    (i32.const -1))
+
+  (func $punycode_adapt (param $delta i32) (param $numpoints i32) (param $first i32) (result i32)
+    (local $k i32)
+    (local.set $delta (select (i32.div_u (local.get $delta) (i32.const 700)) (i32.shr_u (local.get $delta) (i32.const 1)) (local.get $first)))
+    (local.set $delta (i32.add (local.get $delta) (i32.div_u (local.get $delta) (local.get $numpoints))))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.le_u (local.get $delta) (i32.const 455)))
+      (local.set $delta (i32.div_u (local.get $delta) (i32.const 35)))
+      (local.set $k (i32.add (local.get $k) (i32.const 36)))
+      (br $l)))
+    (i32.add (local.get $k) (i32.div_u (i32.mul (i32.const 36) (local.get $delta)) (i32.add (local.get $delta) (i32.const 38)))))
+
+  (func $punycode_decode (param $addr i32) (param $len i32) (param $out i32) (param $cap i32) (result i32)
+    (local $end i32) (local $basic i32) (local $p i32) (local $i i32) (local $n i32) (local $bias i32) (local $count i32)
+    (local $oldi i32) (local $w i32) (local $k i32) (local $digit i32) (local $t i32) (local $j i32) (local $b i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    ;; basic code points precede the last delimiter
+    (local.set $basic (i32.const -1))
+    (local.set $p (local.get $addr))
+    (block $fd (loop $fl
+      (call $work_add (i32.const 1))
+      (br_if $fd (i32.ge_u (local.get $p) (local.get $end)))
+      (if (i32.eq (i32.load8_u (local.get $p)) (i32.const 45)) (then (local.set $basic (i32.sub (local.get $p) (local.get $addr)))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $fl)))
+    (local.set $count (i32.const 0))
+    (if (i32.ge_s (local.get $basic) (i32.const 0))
+      (then
+        (local.set $j (i32.const 0))
+        (block $bd (loop $bl
+          (call $work_add (i32.const 1))
+          (br_if $bd (i32.ge_u (local.get $j) (local.get $basic)))
+          (local.set $b (i32.load8_u (i32.add (local.get $addr) (local.get $j))))
+          (if (i32.ge_u (local.get $b) (i32.const 128)) (then (return (i32.const -1))))
+          (if (i32.ge_u (local.get $count) (local.get $cap)) (then (return (i32.const -1))))
+          (i32.store (i32.add (local.get $out) (i32.shl (local.get $count) (i32.const 2))) (local.get $b))
+          (local.set $count (i32.add (local.get $count) (i32.const 1)))
+          (local.set $j (i32.add (local.get $j) (i32.const 1)))
+          (br $bl)))
+        (local.set $p (i32.add (i32.add (local.get $addr) (local.get $basic)) (i32.const 1))))
+      (else (local.set $p (local.get $addr))))
+    (local.set $n (i32.const 128))
+    (local.set $i (i32.const 0))
+    (local.set $bias (i32.const 72))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $oldi (local.get $i))
+      (local.set $w (i32.const 1))
+      (local.set $k (i32.const 36))
+      (block $kd (loop $kl
+        (call $work_add (i32.const 1))
+        (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const -1))))
+        (local.set $digit (call $punycode_digit (i32.load8_u (local.get $p))))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (if (i32.lt_s (local.get $digit) (i32.const 0)) (then (return (i32.const -1))))
+        (if (i32.gt_u (local.get $digit) (i32.div_u (i32.sub (i32.const 0x7fffffff) (local.get $i)) (local.get $w))) (then (return (i32.const -1))))
+        (local.set $i (i32.add (local.get $i) (i32.mul (local.get $digit) (local.get $w))))
+        (local.set $t (select (i32.const 1) (select (i32.const 26) (i32.sub (local.get $k) (local.get $bias)) (i32.ge_s (local.get $k) (i32.add (local.get $bias) (i32.const 26))))
+                              (i32.le_s (local.get $k) (local.get $bias))))
+        (br_if $kd (i32.lt_u (local.get $digit) (local.get $t)))
+        (if (i32.gt_u (i32.sub (i32.const 36) (local.get $t)) (i32.div_u (i32.const 0x7fffffff) (local.get $w))) (then (return (i32.const -1))))
+        (local.set $w (i32.mul (local.get $w) (i32.sub (i32.const 36) (local.get $t))))
+        (local.set $k (i32.add (local.get $k) (i32.const 36)))
+        (br $kl)))
+      (local.set $bias (call $punycode_adapt (i32.sub (local.get $i) (local.get $oldi)) (i32.add (local.get $count) (i32.const 1)) (i32.eqz (local.get $oldi))))
+      (if (i32.gt_u (i32.div_u (local.get $i) (i32.add (local.get $count) (i32.const 1))) (i32.sub (i32.const 0x10ffff) (local.get $n))) (then (return (i32.const -1))))
+      (local.set $n (i32.add (local.get $n) (i32.div_u (local.get $i) (i32.add (local.get $count) (i32.const 1)))))
+      (local.set $i (i32.rem_u (local.get $i) (i32.add (local.get $count) (i32.const 1))))
+      (if (i32.ge_u (local.get $count) (local.get $cap)) (then (return (i32.const -1))))
+      ;; insert n at position i
+      (local.set $j (local.get $count))
+      (block $md (loop $ml
+        (call $work_add (i32.const 1))
+        (br_if $md (i32.le_u (local.get $j) (local.get $i)))
+        (i32.store (i32.add (local.get $out) (i32.shl (local.get $j) (i32.const 2)))
+                   (i32.load (i32.add (local.get $out) (i32.shl (i32.sub (local.get $j) (i32.const 1)) (i32.const 2)))))
+        (local.set $j (i32.sub (local.get $j) (i32.const 1)))
+        (br $ml)))
+      (i32.store (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 2))) (local.get $n))
+      (local.set $count (i32.add (local.get $count) (i32.const 1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (local.get $count))
+
+  ;; One hostname label [addr, end): ASCII LDH rules; A-labels are decoded
+  ;; and, when they carry non-ASCII, deferred to the IDNA tables.
+  ;; $scratch: 256 u32 slots for punycode output. Returns 1/0/-2.
+  (func $hostname_label (param $addr i32) (param $end i32) (param $scratch i32) (result i32)
+    (local $len i32) (local $p i32) (local $b i32) (local $xn i32) (local $n i32) (local $i i32) (local $non_ascii i32) (local $cp i32)
+    (local.set $len (i32.sub (local.get $end) (local.get $addr)))
+    (if (i32.or (i32.eqz (local.get $len)) (i32.gt_u (local.get $len) (i32.const 63))) (then (return (i32.const 0))))
+    (local.set $p (local.get $addr))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $b (i32.load8_u (local.get $p)))
+      (if (i32.eqz (i32.or (call $is_alnum (local.get $b)) (i32.eq (local.get $b) (i32.const 45)))) (then (return (i32.const 0))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $l)))
+    (if (i32.or (i32.eq (i32.load8_u (local.get $addr)) (i32.const 45)) (i32.eq (i32.load8_u (i32.sub (local.get $end) (i32.const 1))) (i32.const 45)))
+      (then (return (i32.const 0))))
+    ;; "xn--" prefix (case-insensitive)
+    (if (i32.ge_u (local.get $len) (i32.const 4))
+      (then
+        (if (i32.and (i32.eq (i32.or (i32.load8_u (local.get $addr)) (i32.const 32)) (i32.const 120))
+                     (i32.and (i32.eq (i32.or (i32.load8_u offset=1 (local.get $addr)) (i32.const 32)) (i32.const 110))
+                              (i32.and (i32.eq (i32.load8_u offset=2 (local.get $addr)) (i32.const 45)) (i32.eq (i32.load8_u offset=3 (local.get $addr)) (i32.const 45)))))
+          (then (local.set $xn (i32.const 1))))))
+    ;; plain LDH labels are done (RFC 1123 places no rule on "--")
+    (if (i32.eqz (local.get $xn)) (then (return (i32.const 1))))
+    (local.set $n (call $punycode_decode (i32.add (local.get $addr) (i32.const 4)) (i32.sub (local.get $len) (i32.const 4)) (local.get $scratch) (i32.const 256)))
+    (if (i32.le_s (local.get $n) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $i (i32.const 0))
+    (block $cd (loop $cl
+      (call $work_add (i32.const 1))
+      (br_if $cd (i32.ge_u (local.get $i) (local.get $n)))
+      (local.set $cp (i32.load (i32.add (local.get $scratch) (i32.shl (local.get $i) (i32.const 2)))))
+      (if (i32.ge_u (local.get $cp) (i32.const 128)) (then (local.set $non_ascii (i32.const 1))))
+      (if (i32.and (i32.lt_u (local.get $cp) (i32.const 128)) (i32.eqz (i32.or (call $is_alnum (local.get $cp)) (i32.eq (local.get $cp) (i32.const 45)))))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $cl)))
+    ;; an A-label must decode to something that needed encoding
+    (if (i32.eqz (local.get $non_ascii)) (then (return (i32.const 0))))
+    ;; U-label hyphen rules
+    (if (i32.or (i32.eq (i32.load (local.get $scratch)) (i32.const 45))
+                (i32.eq (i32.load (i32.add (local.get $scratch) (i32.shl (i32.sub (local.get $n) (i32.const 1)) (i32.const 2)))) (i32.const 45)))
+      (then (return (i32.const 0))))
+    (if (i32.ge_u (local.get $n) (i32.const 4))
+      (then
+        (if (i32.and (i32.eq (i32.load offset=8 (local.get $scratch)) (i32.const 45)) (i32.eq (i32.load offset=12 (local.get $scratch)) (i32.const 45)))
+          (then (return (i32.const 0))))))
+    (global.get $FORMAT_NEEDS_IDNA))
+
+  ;; ASCII hostname: labels separated by ".", total ≤ 253.
+  (func $parse_hostname (param $addr i32) (param $end i32) (param $scratch i32) (result i32)
+    (local $p i32) (local $start i32) (local $r i32) (local $pending i32)
+    (if (i32.ge_u (local.get $addr) (local.get $end)) (then (return (i32.const 0))))
+    (if (i32.gt_u (i32.sub (local.get $end) (local.get $addr)) (i32.const 253)) (then (return (i32.const 0))))
+    (local.set $p (local.get $addr))
+    (local.set $start (local.get $addr))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (if (i32.or (i32.ge_u (local.get $p) (local.get $end)) (i32.eq (i32.load8_u (local.get $p)) (i32.const 46)))
+        (then
+          (local.set $r (call $hostname_label (local.get $start) (local.get $p) (local.get $scratch)))
+          (if (i32.eqz (local.get $r)) (then (return (i32.const 0))))
+          (if (i32.lt_s (local.get $r) (i32.const 0)) (then (local.set $pending (i32.const 1))))
+          (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+          (local.set $start (i32.add (local.get $p) (i32.const 1)))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $l)))
+    (if (local.get $pending) (then (return (global.get $FORMAT_NEEDS_IDNA))))
+    (i32.const 1))
+
+  (func $fmt_hostname (param $addr i32) (param $len i32) (param $scratch i32) (result i32)
+    (call $parse_hostname (local.get $addr) (i32.add (local.get $addr) (local.get $len)) (local.get $scratch)))
+
+  ;; idn-hostname: ASCII-only names decide here; anything else needs the
+  ;; IDNA tables (mapping, NFC, validity, bidi).
+  (func $fmt_idn_hostname (param $addr i32) (param $len i32) (param $scratch i32) (result i32)
+    (local $p i32) (local $end i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    (local.set $p (local.get $addr))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (if (i32.ge_u (i32.load8_u (local.get $p)) (i32.const 128)) (then (return (global.get $FORMAT_NEEDS_IDNA))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $l)))
+    (call $parse_hostname (local.get $addr) (local.get $end) (local.get $scratch)))
+
+  (func $is_atext (param $b i32) (result i32)
+    (if (call $is_alnum (local.get $b)) (then (return (i32.const 1))))
+    ;; ! # $ % & ' * + - / = ? ^ _ ` { | } ~
+    (if (i32.or (i32.eq (local.get $b) (i32.const 33)) (i32.and (i32.ge_u (local.get $b) (i32.const 35)) (i32.le_u (local.get $b) (i32.const 39)))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 42)) (i32.eq (local.get $b) (i32.const 43))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 45)) (i32.eq (local.get $b) (i32.const 47))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 61)) (i32.eq (local.get $b) (i32.const 63))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 94)) (i32.eq (local.get $b) (i32.const 95))) (then (return (i32.const 1))))
+    (if (i32.and (i32.ge_u (local.get $b) (i32.const 96)) (i32.le_u (local.get $b) (i32.const 126)))
+      (then (return (i32.ne (call $is_alpha (local.get $b)) (i32.const 1)))))
+    (i32.const 0))
+
+  ;; RFC 5321 mailbox. $idn allows non-ASCII scalars in atext/qtext and
+  ;; defers non-ASCII domains to the IDNA tables.
+  (func $parse_email (param $addr i32) (param $len i32) (param $idn i32) (param $scratch i32) (result i32)
+    (local $end i32) (local $p i32) (local $b i32) (local $at i32) (local $prev_dot i32) (local $seen i32) (local $r i32) (local $non_ascii i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    (if (i32.eqz (local.get $len)) (then (return (i32.const 0))))
+    (local.set $p (local.get $addr))
+    (local.set $b (i32.load8_u (local.get $p)))
+    (if (i32.eq (local.get $b) (i32.const 34))
+      (then
+        ;; quoted-string
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (block $qd (loop $ql
+          (call $work_add (i32.const 1))
+          (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+          (local.set $b (i32.load8_u (local.get $p)))
+          (if (i32.eq (local.get $b) (i32.const 34)) (then (local.set $p (i32.add (local.get $p) (i32.const 1))) (br $qd)))
+          (if (i32.eq (local.get $b) (i32.const 92))
+            (then
+              (local.set $p (i32.add (local.get $p) (i32.const 1)))
+              (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+              (local.set $b (i32.load8_u (local.get $p)))
+              (if (i32.or (i32.lt_u (local.get $b) (i32.const 32)) (i32.gt_u (local.get $b) (i32.const 126))) (then (return (i32.const 0)))))
+            (else
+              (if (i32.ge_u (local.get $b) (i32.const 128))
+                (then (if (i32.eqz (local.get $idn)) (then (return (i32.const 0)))))
+                (else
+                  (if (i32.or (i32.lt_u (local.get $b) (i32.const 32)) (i32.eq (local.get $b) (i32.const 127))) (then (return (i32.const 0))))))))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $ql)))
+        (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+        (if (i32.ne (i32.load8_u (local.get $p)) (i32.const 64)) (then (return (i32.const 0)))))
+      (else
+        ;; dot-atom
+        (local.set $prev_dot (i32.const 1))
+        (block $ad (loop $al
+          (call $work_add (i32.const 1))
+          (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+          (local.set $b (i32.load8_u (local.get $p)))
+          (br_if $ad (i32.eq (local.get $b) (i32.const 64)))
+          (if (i32.eq (local.get $b) (i32.const 46))
+            (then
+              (if (local.get $prev_dot) (then (return (i32.const 0))))
+              (local.set $prev_dot (i32.const 1)))
+            (else
+              (if (i32.ge_u (local.get $b) (i32.const 128))
+                (then (if (i32.eqz (local.get $idn)) (then (return (i32.const 0)))))
+                (else (if (i32.eqz (call $is_atext (local.get $b))) (then (return (i32.const 0))))))
+              (local.set $prev_dot (i32.const 0))
+              (local.set $seen (i32.const 1))))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $al)))
+        (if (i32.or (local.get $prev_dot) (i32.eqz (local.get $seen))) (then (return (i32.const 0))))))
+    ;; at '@'
+    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+    (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+    (if (i32.eq (i32.load8_u (local.get $p)) (i32.const 91))
+      (then
+        ;; address literal: [IPv4] or [IPv6:...]
+        (if (i32.ne (i32.load8_u (i32.sub (local.get $end) (i32.const 1))) (i32.const 93)) (then (return (i32.const 0))))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (local.set $end (i32.sub (local.get $end) (i32.const 1)))
+        (if (i32.ge_u (i32.add (local.get $p) (i32.const 5)) (local.get $end))
+          (then (return (call $parse_ipv4 (local.get $p) (local.get $end)))))
+        (if (i32.and (i32.eq (i32.or (i32.load8_u (local.get $p)) (i32.const 32)) (i32.const 105))
+                     (i32.and (i32.eq (i32.or (i32.load8_u offset=1 (local.get $p)) (i32.const 32)) (i32.const 112))
+                              (i32.and (i32.eq (i32.or (i32.load8_u offset=2 (local.get $p)) (i32.const 32)) (i32.const 118))
+                                       (i32.and (i32.eq (i32.load8_u offset=3 (local.get $p)) (i32.const 54)) (i32.eq (i32.load8_u offset=4 (local.get $p)) (i32.const 58))))))
+          (then (return (call $parse_ipv6 (i32.add (local.get $p) (i32.const 5)) (local.get $end)))))
+        (return (call $parse_ipv4 (local.get $p) (local.get $end)))))
+    ;; domain: hostname (idn: non-ASCII deferred)
+    (local.set $at (local.get $p))
+    (block $dd (loop $dl
+      (call $work_add (i32.const 1))
+      (br_if $dd (i32.ge_u (local.get $p) (local.get $end)))
+      (if (i32.ge_u (i32.load8_u (local.get $p)) (i32.const 128)) (then (local.set $non_ascii (i32.const 1))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $dl)))
+    (if (local.get $non_ascii)
+      (then
+        (if (i32.eqz (local.get $idn)) (then (return (i32.const 0))))
+        (return (global.get $FORMAT_NEEDS_IDNA))))
+    (call $parse_hostname (local.get $at) (local.get $end) (local.get $scratch)))
+
+  (func $fmt_uuid (param $addr i32) (param $len i32) (result i32)
+    (local $i i32) (local $b i32)
+    (if (i32.ne (local.get $len) (i32.const 36)) (then (return (i32.const 0))))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 36)))
+      (local.set $b (i32.load8_u (i32.add (local.get $addr) (local.get $i))))
+      (if (i32.or (i32.or (i32.eq (local.get $i) (i32.const 8)) (i32.eq (local.get $i) (i32.const 13)))
+                  (i32.or (i32.eq (local.get $i) (i32.const 18)) (i32.eq (local.get $i) (i32.const 23))))
+        (then (if (i32.ne (local.get $b) (i32.const 45)) (then (return (i32.const 0)))))
+        (else (if (i32.eqz (call $is_hex (local.get $b))) (then (return (i32.const 0))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.const 1))
+
+  (func $parse_json_pointer (param $addr i32) (param $end i32) (result i32)
+    (local $p i32) (local $b i32)
+    (if (i32.ge_u (local.get $addr) (local.get $end)) (then (return (i32.const 1))))
+    (if (i32.ne (i32.load8_u (local.get $addr)) (i32.const 47)) (then (return (i32.const 0))))
+    (local.set $p (local.get $addr))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $b (i32.load8_u (local.get $p)))
+      (if (i32.eq (local.get $b) (i32.const 126))
+        (then
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+          (local.set $b (i32.load8_u (local.get $p)))
+          (if (i32.eqz (i32.or (i32.eq (local.get $b) (i32.const 48)) (i32.eq (local.get $b) (i32.const 49)))) (then (return (i32.const 0))))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $l)))
+    (i32.const 1))
+
+  (func $fmt_json_pointer (param $addr i32) (param $len i32) (result i32)
+    (call $parse_json_pointer (local.get $addr) (i32.add (local.get $addr) (local.get $len))))
+
+  (func $fmt_relative_json_pointer (param $addr i32) (param $len i32) (result i32)
+    (local $end i32) (local $p i32) (local $b i32) (local $digits i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    (local.set $p (local.get $addr))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $b (i32.load8_u (local.get $p)))
+      (br_if $done (i32.eqz (call $is_digit (local.get $b))))
+      (if (i32.and (i32.eq (local.get $digits) (i32.const 1)) (i32.eq (i32.load8_u (local.get $addr)) (i32.const 48))) (then (return (i32.const 0))))
+      (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $l)))
+    (if (i32.eqz (local.get $digits)) (then (return (i32.const 0))))
+    (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 1))))
+    (if (i32.eq (i32.load8_u (local.get $p)) (i32.const 35))
+      (then (return (i32.eq (i32.add (local.get $p) (i32.const 1)) (local.get $end)))))
+    (call $parse_json_pointer (local.get $p) (local.get $end)))
+
+  ;; --- RFC 3986 / RFC 3987 -----------------------------------------------------
+
+  (func $is_unreserved (param $b i32) (result i32)
+    (i32.or (call $is_alnum (local.get $b))
+            (i32.or (i32.or (i32.eq (local.get $b) (i32.const 45)) (i32.eq (local.get $b) (i32.const 46)))
+                    (i32.or (i32.eq (local.get $b) (i32.const 95)) (i32.eq (local.get $b) (i32.const 126))))))
+  (func $is_sub_delim (param $b i32) (result i32)
+    ;; ! $ & ' ( ) * + , ; =
+    (if (i32.eq (local.get $b) (i32.const 33)) (then (return (i32.const 1))))
+    (if (i32.and (i32.ge_u (local.get $b) (i32.const 36)) (i32.le_u (local.get $b) (i32.const 44)))
+      (then (return (i32.ne (local.get $b) (i32.const 37)))))
+    (i32.or (i32.eq (local.get $b) (i32.const 59)) (i32.eq (local.get $b) (i32.const 61))))
+
+  ;; Decode one UTF-8 scalar at p (< end); returns (cp, next) or (-1, p).
+  (func $decode_utf8 (param $p i32) (param $end i32) (result i32 i32)
+    (local $b i32) (local $cp i32) (local $need i32) (local $min i32) (local $q i32)
+    (call $work_add (i32.const 1))
+    (local.set $b (i32.load8_u (local.get $p)))
+    (if (i32.lt_u (local.get $b) (i32.const 0x80)) (then (return (local.get $b) (i32.add (local.get $p) (i32.const 1)))))
+    (if (i32.lt_u (local.get $b) (i32.const 0xc2)) (then (return (i32.const -1) (local.get $p))))
+    (if (i32.lt_u (local.get $b) (i32.const 0xe0))
+      (then (local.set $need (i32.const 1)) (local.set $cp (i32.and (local.get $b) (i32.const 0x1f))) (local.set $min (i32.const 0x80)))
+      (else (if (i32.lt_u (local.get $b) (i32.const 0xf0))
+        (then (local.set $need (i32.const 2)) (local.set $cp (i32.and (local.get $b) (i32.const 0x0f))) (local.set $min (i32.const 0x800)))
+        (else (if (i32.lt_u (local.get $b) (i32.const 0xf5))
+          (then (local.set $need (i32.const 3)) (local.set $cp (i32.and (local.get $b) (i32.const 0x07))) (local.set $min (i32.const 0x10000)))
+          (else (return (i32.const -1) (local.get $p))))))))
+    (local.set $q (i32.add (local.get $p) (i32.const 1)))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.eqz (local.get $need)))
+      (if (i32.ge_u (local.get $q) (local.get $end)) (then (return (i32.const -1) (local.get $p))))
+      (local.set $b (i32.load8_u (local.get $q)))
+      (if (i32.ne (i32.and (local.get $b) (i32.const 0xc0)) (i32.const 0x80)) (then (return (i32.const -1) (local.get $p))))
+      (local.set $cp (i32.or (i32.shl (local.get $cp) (i32.const 6)) (i32.and (local.get $b) (i32.const 0x3f))))
+      (local.set $q (i32.add (local.get $q) (i32.const 1)))
+      (local.set $need (i32.sub (local.get $need) (i32.const 1)))
+      (br $l)))
+    (if (i32.or (i32.lt_u (local.get $cp) (local.get $min)) (i32.gt_u (local.get $cp) (i32.const 0x10ffff))) (then (return (i32.const -1) (local.get $p))))
+    (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0xd800)) (i32.le_u (local.get $cp) (i32.const 0xdfff))) (then (return (i32.const -1) (local.get $p))))
+    (local.get $cp) (local.get $q))
+
+  ;; RFC 3987 ucschar
+  (func $is_ucschar (param $cp i32) (result i32)
+    (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0xa0)) (i32.le_u (local.get $cp) (i32.const 0xd7ff))) (then (return (i32.const 1))))
+    (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0xf900)) (i32.le_u (local.get $cp) (i32.const 0xfdcf))) (then (return (i32.const 1))))
+    (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0xfdf0)) (i32.le_u (local.get $cp) (i32.const 0xffef))) (then (return (i32.const 1))))
+    (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0x10000)) (i32.le_u (local.get $cp) (i32.const 0xefffd)))
+      (then (return (i32.ne (i32.and (local.get $cp) (i32.const 0xffff)) (i32.const 0xfffe)))))
+    (i32.const 0))
+  (func $is_iprivate (param $cp i32) (result i32)
+    (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0xe000)) (i32.le_u (local.get $cp) (i32.const 0xf8ff))) (then (return (i32.const 1))))
+    (if (i32.and (i32.ge_u (local.get $cp) (i32.const 0xf0000)) (i32.le_u (local.get $cp) (i32.const 0x10fffd)))
+      (then (return (i32.ne (i32.and (local.get $cp) (i32.const 0xffff)) (i32.const 0xfffe)))))
+    (i32.const 0))
+
+  ;; Scan a run of pchar-like bytes from p to end or the first byte in
+  ;; $stop_mask (bit 0 '/', bit 1 '?', bit 2 '#', bit 3 '@', bit 4 ':').
+  ;; $extra_mask allows ':' (bit 0) and '@' (bit 1) and '/' '?' (bit 2) as
+  ;; content. Returns the stop position or -1 on an invalid byte.
+  (func $scan_chars (param $p i32) (param $end i32) (param $stop_mask i32) (param $extra_mask i32) (param $iri i32) (param $query i32) (result i32)
+    (local $b i32) (local $cp i32) (local $next i32)
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $b (i32.load8_u (local.get $p)))
+      (if (i32.ge_u (local.get $b) (i32.const 128))
+        (then
+          (if (i32.eqz (local.get $iri)) (then (return (i32.const -1))))
+          (call $decode_utf8 (local.get $p) (local.get $end))
+          (local.set $next)
+          (local.set $cp)
+          (if (i32.lt_s (local.get $cp) (i32.const 0)) (then (return (i32.const -1))))
+          (if (i32.eqz (i32.or (call $is_ucschar (local.get $cp)) (i32.and (local.get $query) (call $is_iprivate (local.get $cp)))))
+            (then (return (i32.const -1))))
+          (local.set $p (local.get $next))
+          (br $l)))
+      (if (i32.and (i32.eq (local.get $b) (i32.const 47)) (i32.ne (i32.and (local.get $stop_mask) (i32.const 1)) (i32.const 0))) (then (br $done)))
+      (if (i32.and (i32.eq (local.get $b) (i32.const 63)) (i32.ne (i32.and (local.get $stop_mask) (i32.const 2)) (i32.const 0))) (then (br $done)))
+      (if (i32.and (i32.eq (local.get $b) (i32.const 35)) (i32.ne (i32.and (local.get $stop_mask) (i32.const 4)) (i32.const 0))) (then (br $done)))
+      (if (i32.and (i32.eq (local.get $b) (i32.const 64)) (i32.ne (i32.and (local.get $stop_mask) (i32.const 8)) (i32.const 0))) (then (br $done)))
+      (if (i32.and (i32.eq (local.get $b) (i32.const 58)) (i32.ne (i32.and (local.get $stop_mask) (i32.const 16)) (i32.const 0))) (then (br $done)))
+      (if (i32.eq (local.get $b) (i32.const 37))
+        (then
+          (if (i32.gt_u (i32.add (local.get $p) (i32.const 3)) (local.get $end)) (then (return (i32.const -1))))
+          (if (i32.eqz (i32.and (call $is_hex (i32.load8_u offset=1 (local.get $p))) (call $is_hex (i32.load8_u offset=2 (local.get $p))))) (then (return (i32.const -1))))
+          (local.set $p (i32.add (local.get $p) (i32.const 3)))
+          (br $l)))
+      (if (i32.or (call $is_unreserved (local.get $b)) (call $is_sub_delim (local.get $b))) (then (local.set $p (i32.add (local.get $p) (i32.const 1))) (br $l)))
+      (if (i32.and (i32.eq (local.get $b) (i32.const 58)) (i32.ne (i32.and (local.get $extra_mask) (i32.const 1)) (i32.const 0))) (then (local.set $p (i32.add (local.get $p) (i32.const 1))) (br $l)))
+      (if (i32.and (i32.eq (local.get $b) (i32.const 64)) (i32.ne (i32.and (local.get $extra_mask) (i32.const 2)) (i32.const 0))) (then (local.set $p (i32.add (local.get $p) (i32.const 1))) (br $l)))
+      (if (i32.and (i32.or (i32.eq (local.get $b) (i32.const 47)) (i32.eq (local.get $b) (i32.const 63))) (i32.ne (i32.and (local.get $extra_mask) (i32.const 4)) (i32.const 0)))
+        (then (local.set $p (i32.add (local.get $p) (i32.const 1))) (br $l)))
+      (return (i32.const -1))))
+    (local.get $p))
+
+  ;; IP-literal body between brackets: IPv6address or IPvFuture.
+  (func $parse_ip_literal (param $p i32) (param $end i32) (result i32)
+    (local $b i32)
+    (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+    (if (i32.eq (i32.or (i32.load8_u (local.get $p)) (i32.const 32)) (i32.const 118))
+      (then
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (if (i32.or (i32.ge_u (local.get $p) (local.get $end)) (i32.eqz (call $is_hex (i32.load8_u (local.get $p))))) (then (return (i32.const 0))))
+        (block $hd (loop $hl
+          (call $work_add (i32.const 1))
+          (br_if $hd (i32.or (i32.ge_u (local.get $p) (local.get $end)) (i32.eqz (call $is_hex (i32.load8_u (local.get $p))))))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $hl)))
+        (if (i32.or (i32.ge_u (local.get $p) (local.get $end)) (i32.ne (i32.load8_u (local.get $p)) (i32.const 46))) (then (return (i32.const 0))))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+        (block $fd (loop $fl
+          (call $work_add (i32.const 1))
+          (br_if $fd (i32.ge_u (local.get $p) (local.get $end)))
+          (local.set $b (i32.load8_u (local.get $p)))
+          (if (i32.eqz (i32.or (i32.or (call $is_unreserved (local.get $b)) (call $is_sub_delim (local.get $b))) (i32.eq (local.get $b) (i32.const 58))))
+            (then (return (i32.const 0))))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $fl)))
+        (return (i32.const 1))))
+    (call $parse_ipv6 (local.get $p) (local.get $end)))
+
+  ;; authority [p, end): [userinfo "@"] host [":" port]
+  (func $parse_authority (param $p i32) (param $end i32) (param $iri i32) (result i32)
+    (local $q i32) (local $host_end i32) (local $b i32)
+    ;; userinfo: everything before the first '@' (unreserved / pct / sub-delims / ':')
+    (local.set $q (local.get $p))
+    (block $ud (loop $ul
+      (call $work_add (i32.const 1))
+      (br_if $ud (i32.ge_u (local.get $q) (local.get $end)))
+      (br_if $ud (i32.eq (i32.load8_u (local.get $q)) (i32.const 64)))
+      (local.set $q (i32.add (local.get $q) (i32.const 1)))
+      (br $ul)))
+    (if (i32.lt_u (local.get $q) (local.get $end))
+      (then
+        (if (i32.ne (call $scan_chars (local.get $p) (local.get $q) (i32.const 0) (i32.const 1) (local.get $iri) (i32.const 0)) (local.get $q))
+          (then (return (i32.const 0))))
+        (local.set $p (i32.add (local.get $q) (i32.const 1)))))
+    ;; host
+    (if (i32.and (i32.lt_u (local.get $p) (local.get $end)) (i32.eq (i32.load8_u (local.get $p)) (i32.const 91)))
+      (then
+        (local.set $q (local.get $p))
+        (block $bd (loop $bl
+          (call $work_add (i32.const 1))
+          (if (i32.ge_u (local.get $q) (local.get $end)) (then (return (i32.const 0))))
+          (br_if $bd (i32.eq (i32.load8_u (local.get $q)) (i32.const 93)))
+          (local.set $q (i32.add (local.get $q) (i32.const 1)))
+          (br $bl)))
+        (if (i32.eqz (call $parse_ip_literal (i32.add (local.get $p) (i32.const 1)) (local.get $q))) (then (return (i32.const 0))))
+        (local.set $p (i32.add (local.get $q) (i32.const 1))))
+      (else
+        ;; reg-name: unreserved / pct / sub-delims, stop at ':'
+        (local.set $q (call $scan_chars (local.get $p) (local.get $end) (i32.const 16) (i32.const 0) (local.get $iri) (i32.const 0)))
+        (if (i32.lt_s (local.get $q) (i32.const 0)) (then (return (i32.const 0))))
+        (local.set $p (local.get $q))))
+    (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 1))))
+    (if (i32.ne (i32.load8_u (local.get $p)) (i32.const 58)) (then (return (i32.const 0))))
+    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+    (block $pd (loop $pl
+      (call $work_add (i32.const 1))
+      (br_if $pd (i32.ge_u (local.get $p) (local.get $end)))
+      (if (i32.eqz (call $is_digit (i32.load8_u (local.get $p)))) (then (return (i32.const 0))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $pl)))
+    (i32.const 1))
+
+  ;; URI / URI-reference / IRI / IRI-reference.
+  (func $parse_uri (param $addr i32) (param $len i32) (param $relative i32) (param $iri i32) (result i32)
+    (local $end i32) (local $p i32) (local $q i32) (local $b i32) (local $scheme i32) (local $slash_seen i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    (local.set $p (local.get $addr))
+    ;; scheme: ALPHA *( ALPHA / DIGIT / + / - / . ) ":" — only if the first
+    ;; delimiter reached is ':' before any of "/?#"
+    (local.set $q (local.get $p))
+    (if (i32.and (i32.lt_u (local.get $q) (local.get $end)) (call $is_alpha (i32.load8_u (local.get $q))))
+      (then
+        (block $sd (loop $sl
+          (call $work_add (i32.const 1))
+          (br_if $sd (i32.ge_u (local.get $q) (local.get $end)))
+          (local.set $b (i32.load8_u (local.get $q)))
+          (br_if $sd (i32.eqz (i32.or (call $is_alnum (local.get $b))
+                                      (i32.or (i32.eq (local.get $b) (i32.const 43)) (i32.or (i32.eq (local.get $b) (i32.const 45)) (i32.eq (local.get $b) (i32.const 46)))))))
+          (local.set $q (i32.add (local.get $q) (i32.const 1)))
+          (br $sl)))
+        (if (i32.and (i32.lt_u (local.get $q) (local.get $end)) (i32.eq (i32.load8_u (local.get $q)) (i32.const 58)))
+          (then
+            (local.set $scheme (i32.const 1))
+            (local.set $p (i32.add (local.get $q) (i32.const 1)))))))
+    (if (i32.eqz (local.get $scheme))
+      (then
+        (if (i32.eqz (local.get $relative)) (then (return (i32.const 0))))
+        ;; relative-path reference: the first segment must not contain ':'
+        (local.set $q (local.get $p))
+        (block $cd (loop $cl
+          (call $work_add (i32.const 1))
+          (br_if $cd (i32.ge_u (local.get $q) (local.get $end)))
+          (local.set $b (i32.load8_u (local.get $q)))
+          (br_if $cd (i32.or (i32.eq (local.get $b) (i32.const 47)) (i32.or (i32.eq (local.get $b) (i32.const 63)) (i32.eq (local.get $b) (i32.const 35)))))
+          (if (i32.eq (local.get $b) (i32.const 58)) (then (return (i32.const 0))))
+          (local.set $q (i32.add (local.get $q) (i32.const 1)))
+          (br $cl)))))
+    ;; hier-part
+    (if (i32.and (i32.lt_u (i32.add (local.get $p) (i32.const 1)) (local.get $end))
+                 (i32.and (i32.eq (i32.load8_u (local.get $p)) (i32.const 47)) (i32.eq (i32.load8_u offset=1 (local.get $p)) (i32.const 47))))
+      (then
+        (local.set $p (i32.add (local.get $p) (i32.const 2)))
+        (local.set $q (local.get $p))
+        (block $ad (loop $al
+          (call $work_add (i32.const 1))
+          (br_if $ad (i32.ge_u (local.get $q) (local.get $end)))
+          (local.set $b (i32.load8_u (local.get $q)))
+          (br_if $ad (i32.or (i32.eq (local.get $b) (i32.const 47)) (i32.or (i32.eq (local.get $b) (i32.const 63)) (i32.eq (local.get $b) (i32.const 35)))))
+          (local.set $q (i32.add (local.get $q) (i32.const 1)))
+          (br $al)))
+        (if (i32.eqz (call $parse_authority (local.get $p) (local.get $q) (local.get $iri))) (then (return (i32.const 0))))
+        (local.set $p (local.get $q))))
+    ;; path: pchar and '/', stop at '?' or '#'
+    (local.set $q (call $scan_chars (local.get $p) (local.get $end) (i32.const 7) (i32.const 3) (local.get $iri) (i32.const 0)))
+    (if (i32.lt_s (local.get $q) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $p (local.get $q))
+    (block $pd (loop $pl
+      (call $work_add (i32.const 1))
+      (br_if $pd (i32.ge_u (local.get $p) (local.get $end)))
+      (br_if $pd (i32.ne (i32.load8_u (local.get $p)) (i32.const 47)))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (local.set $q (call $scan_chars (local.get $p) (local.get $end) (i32.const 7) (i32.const 3) (local.get $iri) (i32.const 0)))
+      (if (i32.lt_s (local.get $q) (i32.const 0)) (then (return (i32.const 0))))
+      (local.set $p (local.get $q))
+      (br $pl)))
+    ;; query
+    (if (i32.and (i32.lt_u (local.get $p) (local.get $end)) (i32.eq (i32.load8_u (local.get $p)) (i32.const 63)))
+      (then
+        (local.set $q (call $scan_chars (i32.add (local.get $p) (i32.const 1)) (local.get $end) (i32.const 4) (i32.const 7) (local.get $iri) (i32.const 1)))
+        (if (i32.lt_s (local.get $q) (i32.const 0)) (then (return (i32.const 0))))
+        (local.set $p (local.get $q))))
+    ;; fragment
+    (if (i32.and (i32.lt_u (local.get $p) (local.get $end)) (i32.eq (i32.load8_u (local.get $p)) (i32.const 35)))
+      (then
+        (local.set $q (call $scan_chars (i32.add (local.get $p) (i32.const 1)) (local.get $end) (i32.const 0) (i32.const 7) (local.get $iri) (i32.const 0)))
+        (if (i32.lt_s (local.get $q) (i32.const 0)) (then (return (i32.const 0))))
+        (local.set $p (local.get $q))))
+    (i32.eq (local.get $p) (local.get $end)))
+
+  ;; RFC 6570 URI Template.
+  (func $fmt_uri_template (param $addr i32) (param $len i32) (result i32)
+    (local $end i32) (local $p i32) (local $b i32) (local $cp i32) (local $next i32) (local $varchars i32) (local $digits i32) (local $first i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    (local.set $p (local.get $addr))
+    (block $done (loop $l
+      (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $b (i32.load8_u (local.get $p)))
+      (if (i32.eq (local.get $b) (i32.const 123))
+        (then
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+          (local.set $b (i32.load8_u (local.get $p)))
+          ;; operator
+          (if (i32.or (i32.or (i32.eq (local.get $b) (i32.const 43)) (i32.eq (local.get $b) (i32.const 35)))
+                      (i32.or (i32.or (i32.eq (local.get $b) (i32.const 46)) (i32.eq (local.get $b) (i32.const 47)))
+                              (i32.or (i32.eq (local.get $b) (i32.const 59)) (i32.or (i32.eq (local.get $b) (i32.const 63)) (i32.eq (local.get $b) (i32.const 38))))))
+            (then (local.set $p (i32.add (local.get $p) (i32.const 1)))))
+          ;; variable-list
+          (block $vd (loop $vl
+            (call $work_add (i32.const 1))
+            ;; varname: varchar *( ["."] varchar )
+            (local.set $varchars (i32.const 0))
+            (local.set $first (i32.const 1))
+            (block $nd (loop $nl
+              (call $work_add (i32.const 1))
+              (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+              (local.set $b (i32.load8_u (local.get $p)))
+              (if (i32.eq (local.get $b) (i32.const 46))
+                (then
+                  (if (i32.eqz (local.get $varchars)) (then (return (i32.const 0))))
+                  (local.set $p (i32.add (local.get $p) (i32.const 1)))
+                  (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+                  (local.set $b (i32.load8_u (local.get $p)))
+                  (if (i32.eqz (i32.or (i32.or (call $is_alnum (local.get $b)) (i32.eq (local.get $b) (i32.const 95))) (i32.eq (local.get $b) (i32.const 37))))
+                    (then (return (i32.const 0))))))
+              (if (i32.eq (local.get $b) (i32.const 37))
+                (then
+                  (if (i32.gt_u (i32.add (local.get $p) (i32.const 3)) (local.get $end)) (then (return (i32.const 0))))
+                  (if (i32.eqz (i32.and (call $is_hex (i32.load8_u offset=1 (local.get $p))) (call $is_hex (i32.load8_u offset=2 (local.get $p))))) (then (return (i32.const 0))))
+                  (local.set $p (i32.add (local.get $p) (i32.const 3)))
+                  (local.set $varchars (i32.add (local.get $varchars) (i32.const 1)))
+                  (br $nl)))
+              (if (i32.or (call $is_alnum (local.get $b)) (i32.eq (local.get $b) (i32.const 95)))
+                (then
+                  (local.set $p (i32.add (local.get $p) (i32.const 1)))
+                  (local.set $varchars (i32.add (local.get $varchars) (i32.const 1)))
+                  (br $nl)))
+              (br $nd)))
+            (if (i32.eqz (local.get $varchars)) (then (return (i32.const 0))))
+            ;; modifier
+            (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+            (local.set $b (i32.load8_u (local.get $p)))
+            (if (i32.eq (local.get $b) (i32.const 42))
+              (then (local.set $p (i32.add (local.get $p) (i32.const 1))))
+              (else
+                (if (i32.eq (local.get $b) (i32.const 58))
+                  (then
+                    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+                    (local.set $digits (i32.const 0))
+                    (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+                    (if (i32.or (i32.lt_u (i32.load8_u (local.get $p)) (i32.const 49)) (i32.gt_u (i32.load8_u (local.get $p)) (i32.const 57))) (then (return (i32.const 0))))
+                    (block $dd (loop $dl
+                      (call $work_add (i32.const 1))
+                      (br_if $dd (i32.or (i32.ge_u (local.get $p) (local.get $end)) (i32.eqz (call $is_digit (i32.load8_u (local.get $p))))))
+                      (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+                      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+                      (br $dl)))
+                    (if (i32.gt_u (local.get $digits) (i32.const 4)) (then (return (i32.const 0))))))))
+            (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+            (local.set $b (i32.load8_u (local.get $p)))
+            (if (i32.eq (local.get $b) (i32.const 44)) (then (local.set $p (i32.add (local.get $p) (i32.const 1))) (br $vl)))
+            (if (i32.eq (local.get $b) (i32.const 125)) (then (local.set $p (i32.add (local.get $p) (i32.const 1))) (br $vd)))
+            (return (i32.const 0))))
+          (br $l)))
+      (if (i32.eq (local.get $b) (i32.const 125)) (then (return (i32.const 0))))
+      (if (i32.eq (local.get $b) (i32.const 37))
+        (then
+          (if (i32.gt_u (i32.add (local.get $p) (i32.const 3)) (local.get $end)) (then (return (i32.const 0))))
+          (if (i32.eqz (i32.and (call $is_hex (i32.load8_u offset=1 (local.get $p))) (call $is_hex (i32.load8_u offset=2 (local.get $p))))) (then (return (i32.const 0))))
+          (local.set $p (i32.add (local.get $p) (i32.const 3)))
+          (br $l)))
+      (if (i32.ge_u (local.get $b) (i32.const 128))
+        (then
+          (call $decode_utf8 (local.get $p) (local.get $end))
+          (local.set $next)
+          (local.set $cp)
+          (if (i32.lt_s (local.get $cp) (i32.const 0)) (then (return (i32.const 0))))
+          (if (i32.eqz (i32.or (call $is_ucschar (local.get $cp)) (call $is_iprivate (local.get $cp)))) (then (return (i32.const 0))))
+          (local.set $p (local.get $next))
+          (br $l)))
+      ;; literal: exclude CTL, SP, " ' < > \ ^ ` { | }  (apostrophe allowed per RFC 6570 errata)
+      (if (i32.or (i32.le_u (local.get $b) (i32.const 32)) (i32.eq (local.get $b) (i32.const 127))) (then (return (i32.const 0))))
+      (if (i32.or (i32.or (i32.eq (local.get $b) (i32.const 34)) (i32.eq (local.get $b) (i32.const 60)))
+                  (i32.or (i32.or (i32.eq (local.get $b) (i32.const 62)) (i32.eq (local.get $b) (i32.const 92)))
+                          (i32.or (i32.eq (local.get $b) (i32.const 94)) (i32.or (i32.eq (local.get $b) (i32.const 96)) (i32.eq (local.get $b) (i32.const 124))))))
+        (then (return (i32.const 0))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $l)))
+    (i32.const 1))
+
+  ;; ECMA-262 (unicode mode) identity-escape rule: a backslash may only
+  ;; escape syntax characters, '/', '-' inside a class, or a known escape
+  ;; letter. Returns 0 when the pattern uses an escape that is invalid.
+  (func $known_escape_letter (param $b i32) (result i32)
+    (if (call $is_digit (local.get $b)) (then (return (i32.const 1))))
+    ;; d D w W s S b B f n r t v c x u p P k
+    (if (i32.or (i32.eq (local.get $b) (i32.const 100)) (i32.eq (local.get $b) (i32.const 68))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 119)) (i32.eq (local.get $b) (i32.const 87))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 115)) (i32.eq (local.get $b) (i32.const 83))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 98)) (i32.eq (local.get $b) (i32.const 66))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 102)) (i32.eq (local.get $b) (i32.const 110))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 114)) (i32.eq (local.get $b) (i32.const 116))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 118)) (i32.eq (local.get $b) (i32.const 99))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 120)) (i32.eq (local.get $b) (i32.const 117))) (then (return (i32.const 1))))
+    (if (i32.or (i32.eq (local.get $b) (i32.const 112)) (i32.eq (local.get $b) (i32.const 80))) (then (return (i32.const 1))))
+    (i32.eq (local.get $b) (i32.const 107)))
+
+  (func $regex_escapes_ok (param $addr i32) (param $len i32) (result i32)
+    (local $p i32) (local $end i32) (local $b i32)
+    (local.set $end (i32.add (local.get $addr) (local.get $len)))
+    (local.set $p (local.get $addr))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+      (call $work_add (i32.const 1))
+      (local.set $b (i32.load8_u (local.get $p)))
+      (if (i32.eq (local.get $b) (i32.const 92))
+        (then
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (if (i32.ge_u (local.get $p) (local.get $end)) (then (return (i32.const 0))))
+          (call $work_add (i32.const 1))
+          (local.set $b (i32.load8_u (local.get $p)))
+          (if (i32.and (call $is_alnum (local.get $b)) (i32.eqz (call $known_escape_letter (local.get $b))))
+            (then (return (i32.const 0))))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $l)))
+    (i32.const 1))
+
+  ;; format: regex — ECMA-262 syntax validity via the regex engine's scan.
+  ;; Refused dialect constructs (lookaround, backreferences, \p) are still
+  ;; well-formed regexes, so UNSUPPORTED counts as valid; only SYNTAX_ERROR
+  ;; is a format failure. Returns 1/0 or a negated status.
+  (func $fmt_regex (param $cont i32) (param $addr i32) (param $len i32) (result i32)
+    (local $ws_size i32) (local $arena i32) (local $ws i32) (local $status i32) (local $fuel i32) (local $initialize i32) (local $mark i32)
+    (local $regex_before i64)
+    (if (i32.eqz (call $regex_escapes_ok (local.get $addr) (local.get $len))) (then (return (i32.const 0))))
+    (local.set $ws_size (call $regex_scan_workspace_size (local.get $len)))
+    (if (i32.lt_s (local.get $ws_size) (i32.const 0)) (then (return (i32.sub (i32.const 0) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (local.set $mark (call $ch (local.get $cont) (global.get $CH_ARENA_CURSOR)))
+    (local.set $arena (call $arena_alloc (local.get $cont) (local.get $ws_size)))
+    (if (i32.lt_s (local.get $arena) (i32.const 0)) (then (return (i32.sub (i32.const 0) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (local.set $ws (call $arena_addr (local.get $cont) (local.get $arena)))
+    (local.set $initialize (i32.const 1))
+    (block $done (loop $l
+      (local.set $regex_before (if (result i64) (local.get $initialize) (then (i64.const 0)) (else (call $regex_scan_work_charged (local.get $ws)))))
+        (call $regex_scan_pattern (local.get $addr) (local.get $len) (local.get $ws) (local.get $ws_size) (local.get $initialize) (i32.const 0x7fffffff))
+      (local.set $fuel)
+      (local.set $status)
+      (call $work_regex (local.get $regex_before) (call $regex_scan_work_charged (local.get $ws)) (call $regex_scan_work_overflow (local.get $ws)))
+      (local.set $initialize (i32.const 0))
+      (br_if $l (i32.eq (local.get $status) (global.get $REGEX_STATUS_PAUSED)))
+      (br $done)))
+    (call $ch_set (local.get $cont) (global.get $CH_ARENA_CURSOR) (local.get $mark))
+    (if (i32.or (i32.eq (local.get $status) (global.get $REGEX_STATUS_OK)) (i32.eq (local.get $status) (global.get $REGEX_STATUS_UNSUPPORTED)))
+      (then (return (i32.const 1))))
+    (if (i32.eq (local.get $status) (global.get $REGEX_STATUS_SYNTAX_ERROR)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $status) (global.get $REGEX_STATUS_INVALID_UTF8)) (then (return (i32.sub (i32.const 0) (global.get $STATUS_INVALID_UTF8)))))
+    (i32.sub (i32.const 0) (global.get $STATUS_LIMIT_EXCEEDED)))
+
+  ;; Dispatch. $scratch: 1 KiB of arena for punycode output.
+  (func $format_check (param $cont i32) (param $id i32) (param $addr i32) (param $len i32) (param $scratch i32) (result i32)
+    (if (i32.eq (local.get $id) (global.get $FMT_DATE_TIME)) (then (return (call $fmt_date_time (local.get $addr) (local.get $len)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_DATE)) (then (return (call $fmt_date (local.get $addr) (local.get $len)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_TIME)) (then (return (call $fmt_time (local.get $addr) (local.get $len)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_DURATION)) (then (return (call $fmt_duration (local.get $addr) (local.get $len)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_EMAIL)) (then (return (call $parse_email (local.get $addr) (local.get $len) (i32.const 0) (local.get $scratch)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_IDN_EMAIL)) (then (return (call $parse_email (local.get $addr) (local.get $len) (i32.const 1) (local.get $scratch)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_HOSTNAME)) (then (return (call $fmt_hostname (local.get $addr) (local.get $len) (local.get $scratch)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_IDN_HOSTNAME)) (then (return (call $fmt_idn_hostname (local.get $addr) (local.get $len) (local.get $scratch)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_IPV4)) (then (return (call $fmt_ipv4 (local.get $addr) (local.get $len)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_IPV6)) (then (return (call $fmt_ipv6 (local.get $addr) (local.get $len)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_URI)) (then (return (call $parse_uri (local.get $addr) (local.get $len) (i32.const 0) (i32.const 0)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_URI_REFERENCE)) (then (return (call $parse_uri (local.get $addr) (local.get $len) (i32.const 1) (i32.const 0)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_IRI)) (then (return (call $parse_uri (local.get $addr) (local.get $len) (i32.const 0) (i32.const 1)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_IRI_REFERENCE)) (then (return (call $parse_uri (local.get $addr) (local.get $len) (i32.const 1) (i32.const 1)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_URI_TEMPLATE)) (then (return (call $fmt_uri_template (local.get $addr) (local.get $len)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_UUID)) (then (return (call $fmt_uuid (local.get $addr) (local.get $len)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_JSON_POINTER)) (then (return (call $fmt_json_pointer (local.get $addr) (local.get $len)))))
+    (if (i32.eq (local.get $id) (global.get $FMT_RELATIVE_JSON_POINTER)) (then (return (call $fmt_relative_json_pointer (local.get $addr) (local.get $len)))))
+    (global.get $STATUS_CORRUPT_PROGRAM))
+
+
+  ;; ==========================================================================
+  ;; URI reference resolution (RFC 3986 §5.2) over a caller-owned output
+  ;; buffer. Components are located by offsets; nothing is decoded.
+  ;; ==========================================================================
+
+  ;; Parse [addr, end) into component bounds written to $out (8 u32s):
+  ;; scheme end (-1 none), authority start/end (-1 none), path start/end,
+  ;; query start (-1 none), fragment start (-1 none), end.
+  (func $uri_components (param $addr i32) (param $end i32) (param $out i32)
+    (local $p i32) (local $b i32) (local $scheme_end i32) (local $auth_start i32) (local $auth_end i32) (local $path_start i32)
+    (local $path_end i32) (local $query i32) (local $frag i32)
+    (local.set $scheme_end (i32.const -1))
+    (local.set $auth_start (i32.const -1))
+    (local.set $auth_end (i32.const -1))
+    (local.set $query (i32.const -1))
+    (local.set $frag (i32.const -1))
+    (local.set $p (local.get $addr))
+    ;; scheme
+    (if (i32.and (i32.lt_u (local.get $p) (local.get $end)) (call $is_alpha (i32.load8_u (local.get $p))))
+      (then
+        (block $sd (loop $sl
+        (call $work_add (i32.const 1))
+          (br_if $sd (i32.ge_u (local.get $p) (local.get $end)))
+          (local.set $b (i32.load8_u (local.get $p)))
+          (if (i32.eq (local.get $b) (i32.const 58)) (then (local.set $scheme_end (local.get $p)) (br $sd)))
+          (br_if $sd (i32.eqz (i32.or (call $is_alnum (local.get $b))
+                                      (i32.or (i32.eq (local.get $b) (i32.const 43)) (i32.or (i32.eq (local.get $b) (i32.const 45)) (i32.eq (local.get $b) (i32.const 46)))))))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $sl)))))
+    (if (i32.ge_s (local.get $scheme_end) (i32.const 0))
+      (then (local.set $p (i32.add (local.get $scheme_end) (i32.const 1))))
+      (else (local.set $p (local.get $addr))))
+    ;; authority
+    (if (i32.and (i32.lt_u (i32.add (local.get $p) (i32.const 1)) (local.get $end))
+                 (i32.and (i32.eq (i32.load8_u (local.get $p)) (i32.const 47)) (i32.eq (i32.load8_u offset=1 (local.get $p)) (i32.const 47))))
+      (then
+        (local.set $p (i32.add (local.get $p) (i32.const 2)))
+        (local.set $auth_start (local.get $p))
+        (block $ad (loop $al
+        (call $work_add (i32.const 1))
+          (br_if $ad (i32.ge_u (local.get $p) (local.get $end)))
+          (local.set $b (i32.load8_u (local.get $p)))
+          (br_if $ad (i32.or (i32.eq (local.get $b) (i32.const 47)) (i32.or (i32.eq (local.get $b) (i32.const 63)) (i32.eq (local.get $b) (i32.const 35)))))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $al)))
+        (local.set $auth_end (local.get $p))))
+    (local.set $path_start (local.get $p))
+    (block $pd (loop $pl
+        (call $work_add (i32.const 1))
+      (br_if $pd (i32.ge_u (local.get $p) (local.get $end)))
+      (local.set $b (i32.load8_u (local.get $p)))
+      (br_if $pd (i32.or (i32.eq (local.get $b) (i32.const 63)) (i32.eq (local.get $b) (i32.const 35))))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br $pl)))
+    (local.set $path_end (local.get $p))
+    (if (i32.and (i32.lt_u (local.get $p) (local.get $end)) (i32.eq (i32.load8_u (local.get $p)) (i32.const 63)))
+      (then
+        (local.set $query (i32.add (local.get $p) (i32.const 1)))
+        (block $qd (loop $ql
+        (call $work_add (i32.const 1))
+          (br_if $qd (i32.ge_u (local.get $p) (local.get $end)))
+          (br_if $qd (i32.eq (i32.load8_u (local.get $p)) (i32.const 35)))
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (br $ql)))))
+    (if (i32.and (i32.lt_u (local.get $p) (local.get $end)) (i32.eq (i32.load8_u (local.get $p)) (i32.const 35)))
+      (then (local.set $frag (i32.add (local.get $p) (i32.const 1)))))
+    (i32.store (local.get $out) (local.get $scheme_end))
+    (i32.store offset=4 (local.get $out) (local.get $auth_start))
+    (i32.store offset=8 (local.get $out) (local.get $auth_end))
+    (i32.store offset=12 (local.get $out) (local.get $path_start))
+    (i32.store offset=16 (local.get $out) (local.get $path_end))
+    (i32.store offset=20 (local.get $out) (local.get $query))
+    (i32.store offset=24 (local.get $out) (local.get $frag))
+    (i32.store offset=28 (local.get $out) (local.get $end)))
+
+  ;; Append bytes to an output cursor; returns the new cursor or -1.
+  (func $out_append (param $cursor i32) (param $limit i32) (param $src i32) (param $len i32) (result i32)
+    (if (i32.gt_u (local.get $len) (i32.sub (local.get $limit) (local.get $cursor))) (then (return (i32.const -1))))
+    (call $work_copy (local.get $cursor) (local.get $src) (local.get $len))
+    (i32.add (local.get $cursor) (local.get $len)))
+
+  ;; remove_dot_segments over [src, src+len) into [dst, limit). Returns bytes written or -1.
+  (func $remove_dot_segments (param $src i32) (param $len i32) (param $dst i32) (param $limit i32) (result i32)
+    (local $in i32) (local $end i32) (local $out i32) (local $seg_end i32) (local $seg_len i32) (local $b i32)
+    (local.set $in (local.get $src))
+    (local.set $end (i32.add (local.get $src) (local.get $len)))
+    (local.set $out (local.get $dst))
+    (block $done (loop $l
+        (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $in) (local.get $end)))
+      ;; "../" or "./" at start
+      (if (i32.and (i32.ge_u (i32.sub (local.get $end) (local.get $in)) (i32.const 3))
+                   (i32.and (i32.eq (i32.load8_u (local.get $in)) (i32.const 46)) (i32.and (i32.eq (i32.load8_u offset=1 (local.get $in)) (i32.const 46)) (i32.eq (i32.load8_u offset=2 (local.get $in)) (i32.const 47)))))
+        (then (local.set $in (i32.add (local.get $in) (i32.const 3))) (br $l)))
+      (if (i32.and (i32.ge_u (i32.sub (local.get $end) (local.get $in)) (i32.const 2))
+                   (i32.and (i32.eq (i32.load8_u (local.get $in)) (i32.const 46)) (i32.eq (i32.load8_u offset=1 (local.get $in)) (i32.const 47))))
+        (then (local.set $in (i32.add (local.get $in) (i32.const 2))) (br $l)))
+      ;; "/./" or "/." (end)
+      (if (i32.and (i32.ge_u (i32.sub (local.get $end) (local.get $in)) (i32.const 3))
+                   (i32.and (i32.eq (i32.load8_u (local.get $in)) (i32.const 47)) (i32.and (i32.eq (i32.load8_u offset=1 (local.get $in)) (i32.const 46)) (i32.eq (i32.load8_u offset=2 (local.get $in)) (i32.const 47)))))
+        (then (local.set $in (i32.add (local.get $in) (i32.const 2))) (br $l)))
+      (if (i32.and (i32.eq (i32.sub (local.get $end) (local.get $in)) (i32.const 2))
+                   (i32.and (i32.eq (i32.load8_u (local.get $in)) (i32.const 47)) (i32.eq (i32.load8_u offset=1 (local.get $in)) (i32.const 46))))
+        (then
+          ;; replace with "/"
+          (local.set $out (call $out_append (local.get $out) (local.get $limit) (local.get $in) (i32.const 1)))
+          (if (i32.lt_s (local.get $out) (i32.const 0)) (then (return (i32.const -1))))
+          (br $done)))
+      ;; "/../" or "/.." (end): pop last segment
+      (if (i32.or (i32.and (i32.ge_u (i32.sub (local.get $end) (local.get $in)) (i32.const 4))
+                           (i32.and (i32.eq (i32.load8_u (local.get $in)) (i32.const 47))
+                                    (i32.and (i32.eq (i32.load8_u offset=1 (local.get $in)) (i32.const 46))
+                                             (i32.and (i32.eq (i32.load8_u offset=2 (local.get $in)) (i32.const 46)) (i32.eq (i32.load8_u offset=3 (local.get $in)) (i32.const 47))))))
+                  (i32.and (i32.eq (i32.sub (local.get $end) (local.get $in)) (i32.const 3))
+                           (i32.and (i32.eq (i32.load8_u (local.get $in)) (i32.const 47))
+                                    (i32.and (i32.eq (i32.load8_u offset=1 (local.get $in)) (i32.const 46)) (i32.eq (i32.load8_u offset=2 (local.get $in)) (i32.const 46))))))
+        (then
+          (local.set $in (i32.add (local.get $in) (i32.const 3)))
+          ;; drop the last "/segment" from out
+          (block $bd (loop $bl
+        (call $work_add (i32.const 1))
+            (br_if $bd (i32.le_u (local.get $out) (local.get $dst)))
+            (local.set $out (i32.sub (local.get $out) (i32.const 1)))
+            (br_if $bd (i32.eq (i32.load8_u (local.get $out)) (i32.const 47)))
+            (br $bl)))
+          (if (i32.eq (i32.sub (local.get $end) (local.get $in)) (i32.const 0))
+            (then
+              (local.set $out (call $out_append (local.get $out) (local.get $limit) (local.get $src) (i32.const 0)))
+              ;; "/.." at end leaves "/"
+              (if (i32.ge_u (local.get $out) (local.get $limit)) (then (return (i32.const -1))))
+              (i32.store8 (local.get $out) (i32.const 47))
+              (local.set $out (i32.add (local.get $out) (i32.const 1)))
+              (br $done)))
+          (br $l)))
+      ;; "." or ".." alone
+      (if (i32.or (i32.and (i32.eq (i32.sub (local.get $end) (local.get $in)) (i32.const 1)) (i32.eq (i32.load8_u (local.get $in)) (i32.const 46)))
+                  (i32.and (i32.eq (i32.sub (local.get $end) (local.get $in)) (i32.const 2))
+                           (i32.and (i32.eq (i32.load8_u (local.get $in)) (i32.const 46)) (i32.eq (i32.load8_u offset=1 (local.get $in)) (i32.const 46)))))
+        (then (br $done)))
+      ;; move the first path segment (with its leading "/" if any) to out
+      (local.set $seg_end (local.get $in))
+      (if (i32.eq (i32.load8_u (local.get $seg_end)) (i32.const 47)) (then (local.set $seg_end (i32.add (local.get $seg_end) (i32.const 1)))))
+      (block $sd (loop $sl
+        (call $work_add (i32.const 1))
+        (br_if $sd (i32.ge_u (local.get $seg_end) (local.get $end)))
+        (br_if $sd (i32.eq (i32.load8_u (local.get $seg_end)) (i32.const 47)))
+        (local.set $seg_end (i32.add (local.get $seg_end) (i32.const 1)))
+        (br $sl)))
+      (local.set $out (call $out_append (local.get $out) (local.get $limit) (local.get $in) (i32.sub (local.get $seg_end) (local.get $in))))
+      (if (i32.lt_s (local.get $out) (i32.const 0)) (then (return (i32.const -1))))
+      (local.set $in (local.get $seg_end))
+      (br $l)))
+    (i32.sub (local.get $out) (local.get $dst)))
+
+  ;; Resolve reference R against base B into [out, out+cap): the target URI
+  ;; without its fragment. Returns (bytes written, fragment start in R or -1).
+  ;; $bc/$rc are 32-byte component scratch areas.
+  (func $uri_resolve (param $base i32) (param $blen i32) (param $ref i32) (param $rlen i32)
+                     (param $out i32) (param $cap i32) (param $bc i32) (param $rc i32) (result i32 i32)
+    (local $limit i32) (local $cur i32) (local $bend i32) (local $rend i32) (local $tmp i32) (local $tmp_len i32) (local $n i32)
+    (local $b_scheme i32) (local $r_scheme i32) (local $b_auth_s i32) (local $b_auth_e i32) (local $r_auth_s i32) (local $r_auth_e i32)
+    (local $b_path_s i32) (local $b_path_e i32) (local $r_path_s i32) (local $r_path_e i32) (local $b_query i32) (local $r_query i32) (local $r_frag i32)
+    (local $query_s i32) (local $query_e i32) (local $path_buf i32) (local $path_len i32) (local $slash i32)
+    (local.set $bend (i32.add (local.get $base) (local.get $blen)))
+    (local.set $rend (i32.add (local.get $ref) (local.get $rlen)))
+    (call $uri_components (local.get $base) (local.get $bend) (local.get $bc))
+    (call $uri_components (local.get $ref) (local.get $rend) (local.get $rc))
+    (local.set $b_scheme (i32.load (local.get $bc)))
+    (local.set $b_auth_s (i32.load offset=4 (local.get $bc)))
+    (local.set $b_auth_e (i32.load offset=8 (local.get $bc)))
+    (local.set $b_path_s (i32.load offset=12 (local.get $bc)))
+    (local.set $b_path_e (i32.load offset=16 (local.get $bc)))
+    (local.set $b_query (i32.load offset=20 (local.get $bc)))
+    (local.set $r_scheme (i32.load (local.get $rc)))
+    (local.set $r_auth_s (i32.load offset=4 (local.get $rc)))
+    (local.set $r_auth_e (i32.load offset=8 (local.get $rc)))
+    (local.set $r_path_s (i32.load offset=12 (local.get $rc)))
+    (local.set $r_path_e (i32.load offset=16 (local.get $rc)))
+    (local.set $r_query (i32.load offset=20 (local.get $rc)))
+    (local.set $r_frag (i32.load offset=24 (local.get $rc)))
+    ;; the output holds "scheme:" "//authority" path "?query"; the path is
+    ;; assembled in the upper half of the buffer first
+    (local.set $limit (i32.add (local.get $out) (local.get $cap)))
+    (local.set $path_buf (i32.add (local.get $out) (i32.shr_u (local.get $cap) (i32.const 1))))
+    (local.set $cur (local.get $out))
+    (if (i32.ge_s (local.get $r_scheme) (i32.const 0))
+      (then
+        ;; T = R
+        (local.set $cur (call $out_append (local.get $cur) (local.get $path_buf) (local.get $ref) (i32.add (i32.sub (local.get $r_scheme) (local.get $ref)) (i32.const 1))))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1) (i32.const -1))))
+        (if (i32.ge_s (local.get $r_auth_s) (i32.const 0))
+          (then
+            (local.set $cur (call $out_append (local.get $cur) (local.get $path_buf) (i32.sub (local.get $r_auth_s) (i32.const 2)) (i32.add (i32.sub (local.get $r_auth_e) (local.get $r_auth_s)) (i32.const 2))))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1) (i32.const -1))))))
+        (local.set $path_len (call $remove_dot_segments (local.get $r_path_s) (i32.sub (local.get $r_path_e) (local.get $r_path_s)) (local.get $path_buf) (local.get $limit)))
+        (local.set $query_s (local.get $r_query))
+        (local.set $query_e (select (local.get $r_frag) (local.get $rend) (i32.ge_s (local.get $r_frag) (i32.const 0))))
+        (if (i32.ge_s (local.get $query_e) (i32.const 0)) (then (if (i32.ge_s (local.get $r_frag) (i32.const 0)) (then (local.set $query_e (i32.sub (local.get $r_frag) (i32.const 1))))))))
+      (else
+        ;; scheme from base
+        (if (i32.ge_s (local.get $b_scheme) (i32.const 0))
+          (then
+            (local.set $cur (call $out_append (local.get $cur) (local.get $path_buf) (local.get $base) (i32.add (i32.sub (local.get $b_scheme) (local.get $base)) (i32.const 1))))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1) (i32.const -1))))))
+        (if (i32.ge_s (local.get $r_auth_s) (i32.const 0))
+          (then
+            (local.set $cur (call $out_append (local.get $cur) (local.get $path_buf) (i32.sub (local.get $r_auth_s) (i32.const 2)) (i32.add (i32.sub (local.get $r_auth_e) (local.get $r_auth_s)) (i32.const 2))))
+            (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1) (i32.const -1))))
+            (local.set $path_len (call $remove_dot_segments (local.get $r_path_s) (i32.sub (local.get $r_path_e) (local.get $r_path_s)) (local.get $path_buf) (local.get $limit)))
+            (local.set $query_s (local.get $r_query))
+            (local.set $query_e (select (i32.sub (local.get $r_frag) (i32.const 1)) (local.get $rend) (i32.ge_s (local.get $r_frag) (i32.const 0)))))
+          (else
+            (if (i32.ge_s (local.get $b_auth_s) (i32.const 0))
+              (then
+                (local.set $cur (call $out_append (local.get $cur) (local.get $path_buf) (i32.sub (local.get $b_auth_s) (i32.const 2)) (i32.add (i32.sub (local.get $b_auth_e) (local.get $b_auth_s)) (i32.const 2))))
+                (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1) (i32.const -1))))))
+            (if (i32.eq (local.get $r_path_s) (local.get $r_path_e))
+              (then
+                ;; empty path: keep base path; query from R if present else base
+                (local.set $path_len (i32.sub (local.get $b_path_e) (local.get $b_path_s)))
+                (if (i32.gt_u (local.get $path_len) (i32.sub (local.get $limit) (local.get $path_buf))) (then (return (i32.const -1) (i32.const -1))))
+                (call $work_copy (local.get $path_buf) (local.get $b_path_s) (local.get $path_len))
+                (if (i32.ge_s (local.get $r_query) (i32.const 0))
+                  (then
+                    (local.set $query_s (local.get $r_query))
+                    (local.set $query_e (select (i32.sub (local.get $r_frag) (i32.const 1)) (local.get $rend) (i32.ge_s (local.get $r_frag) (i32.const 0)))))
+                  (else
+                    (local.set $query_s (local.get $b_query))
+                    (local.set $query_e (select (i32.sub (i32.load offset=24 (local.get $bc)) (i32.const 1)) (local.get $bend) (i32.ge_s (i32.load offset=24 (local.get $bc)) (i32.const 0)))))))
+              (else
+                (if (i32.eq (i32.load8_u (local.get $r_path_s)) (i32.const 47))
+                  (then
+                    (local.set $path_len (call $remove_dot_segments (local.get $r_path_s) (i32.sub (local.get $r_path_e) (local.get $r_path_s)) (local.get $path_buf) (local.get $limit))))
+                  (else
+                    ;; merge: base path up to and including its last "/" (or "/" when base has authority but empty path), then R's path
+                    (local.set $tmp (local.get $path_buf))
+                    (local.set $n (local.get $b_path_e))
+                    (block $md (loop $ml
+        (call $work_add (i32.const 1))
+                      (br_if $md (i32.le_u (local.get $n) (local.get $b_path_s)))
+                      (br_if $md (i32.eq (i32.load8_u (i32.sub (local.get $n) (i32.const 1))) (i32.const 47)))
+                      (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+                      (br $ml)))
+                    ;; merged text is staged in the top quarter before dot-segment removal
+                    (local.set $tmp (i32.add (local.get $path_buf) (i32.shr_u (i32.sub (local.get $limit) (local.get $path_buf)) (i32.const 1))))
+                    (local.set $tmp_len (i32.const 0))
+                    (if (i32.and (i32.ge_s (local.get $b_auth_s) (i32.const 0)) (i32.eq (local.get $b_path_s) (local.get $b_path_e)))
+                      (then
+                        (if (i32.ge_u (i32.add (local.get $tmp) (i32.const 1)) (local.get $limit)) (then (return (i32.const -1) (i32.const -1))))
+                        (i32.store8 (local.get $tmp) (i32.const 47))
+                        (local.set $tmp_len (i32.const 1)))
+                      (else
+                        (local.set $tmp_len (i32.sub (local.get $n) (local.get $b_path_s)))
+                        (if (i32.gt_u (local.get $tmp_len) (i32.sub (local.get $limit) (local.get $tmp))) (then (return (i32.const -1) (i32.const -1))))
+                        (call $work_copy (local.get $tmp) (local.get $b_path_s) (local.get $tmp_len))))
+                    (if (i32.gt_u (i32.sub (local.get $r_path_e) (local.get $r_path_s)) (i32.sub (i32.sub (local.get $limit) (local.get $tmp)) (local.get $tmp_len)))
+                      (then (return (i32.const -1) (i32.const -1))))
+                    (call $work_copy (i32.add (local.get $tmp) (local.get $tmp_len)) (local.get $r_path_s) (i32.sub (local.get $r_path_e) (local.get $r_path_s)))
+                    (local.set $tmp_len (i32.add (local.get $tmp_len) (i32.sub (local.get $r_path_e) (local.get $r_path_s))))
+                    (local.set $path_len (call $remove_dot_segments (local.get $tmp) (local.get $tmp_len) (local.get $path_buf) (local.get $tmp)))))
+                (local.set $query_s (local.get $r_query))
+                (local.set $query_e (select (i32.sub (local.get $r_frag) (i32.const 1)) (local.get $rend) (i32.ge_s (local.get $r_frag) (i32.const 0))))))))))
+    (if (i32.lt_s (local.get $path_len) (i32.const 0)) (then (return (i32.const -1) (i32.const -1))))
+    (local.set $cur (call $out_append (local.get $cur) (local.get $path_buf) (local.get $path_buf) (local.get $path_len)))
+    (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1) (i32.const -1))))
+    (if (i32.ge_s (local.get $query_s) (i32.const 0))
+      (then
+        (if (i32.ge_u (local.get $cur) (local.get $path_buf)) (then (return (i32.const -1) (i32.const -1))))
+        (i32.store8 (local.get $cur) (i32.const 63))
+        (local.set $cur (call $out_append (i32.add (local.get $cur) (i32.const 1)) (local.get $path_buf) (local.get $query_s) (i32.sub (local.get $query_e) (local.get $query_s))))
+        (if (i32.lt_s (local.get $cur) (i32.const 0)) (then (return (i32.const -1) (i32.const -1))))))
+    (i32.sub (local.get $cur) (local.get $out)) (local.get $r_frag))
+
+  ;; ==========================================================================
+  ;; Compile-time resources, anchors, deferred references. All records live
+  ;; in the workspace's string arena and tables (both passes build them).
+  ;; ==========================================================================
+
+  (global $CWH_RES_CAP i32 (i32.const 192))
+  (global $CWH_ANCHOR_CAP i32 (i32.const 196))
+  (global $CWH_DREF_CAP i32 (i32.const 200))
+  (global $CWH_STR_CAP i32 (i32.const 204))
+  (global $CWH_DRAIN_CURSOR i32 (i32.const 208))
+  (global $CWH_DRAIN_PENDING i32 (i32.const 212))
+  (global $CWH_DRAIN_SWEEP i32 (i32.const 216))
+  (global $CWH_DRAIN_PROGRESS i32 (i32.const 220))
+  (global $CWH_BUNDLE i32 (i32.const 224))
+  (global $CWH_ROOT_VOFF i32 (i32.const 228))
+  (global $CWH_STR_OFFSET i32 (i32.const 160))
+  (global $CWH_STR_CURSOR i32 (i32.const 164))
+  (global $CWH_RES_OFFSET i32 (i32.const 168))
+  (global $CWH_RES_COUNT i32 (i32.const 172))
+  (global $CWH_ANCHOR_OFFSET i32 (i32.const 176))
+  (global $CWH_ANCHOR_COUNT i32 (i32.const 180))
+  (global $CWH_DREF_OFFSET i32 (i32.const 184))
+  (global $CWH_DREF_COUNT i32 (i32.const 188))
+  ;; Resource and drain fields remain at their original header offsets.
+  (global $CW_RES_SIZE i32 (i32.const 16))
+  (global $CW_ANCHOR_SIZE i32 (i32.const 20))
+  (global $CW_DREF_SIZE i32 (i32.const 24))
+  (global $CW_URI_SCRATCH i32 (i32.const 8192))
+  (global $MAX_URI_BYTES i32 (i32.const 2048))
+  (global $CF_RESOURCE i32 (i32.const 64))   ;; overlays slot 0 (code 0 = "not a keyword", never set)
+
+  ;; resource record: [uri arena off:4][uri len:4][schema offset:4][node id:4]
+  ;; anchor record:   [resource:4][name arena off:4][name len:4][schema offset:4][flags: bit0 dynamic, bit1 node-id-known; node id in high bits? no — separate below]
+  ;; deferred ref:    [ref schema offset:4][resource:4][code offset:4][target schema offset:4][target resource:4][flags:4]
+
+  (func $arena_string (param $ws i32) (param $addr i32) (param $len i32) (result i32)
+    (local $cursor i32)
+    (local.set $cursor (call $cw (local.get $ws) (global.get $CWH_STR_CURSOR)))
+    (if (i32.gt_u (local.get $len) (i32.sub (call $cw (local.get $ws) (global.get $CWH_STR_CAP)) (local.get $cursor))) (then (return (i32.const -1))))
+    (call $work_copy (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_STR_OFFSET))) (local.get $cursor)) (local.get $addr) (local.get $len))
+    (call $cw_set (local.get $ws) (global.get $CWH_STR_CURSOR) (i32.add (local.get $cursor) (local.get $len)))
+    (local.get $cursor))
+  (func $arena_str_addr (param $ws i32) (param $off i32) (result i32)
+    (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_STR_OFFSET))) (local.get $off)))
+  (func $res_addr (param $ws i32) (param $index i32) (result i32)
+    (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_RES_OFFSET))) (i32.mul (local.get $index) (global.get $CW_RES_SIZE))))
+  (func $anchor_addr (param $ws i32) (param $index i32) (result i32)
+    (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_ANCHOR_OFFSET))) (i32.mul (local.get $index) (global.get $CW_ANCHOR_SIZE))))
+  (func $dref_addr (param $ws i32) (param $index i32) (result i32)
+    (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_DREF_OFFSET))) (i32.mul (local.get $index) (global.get $CW_DREF_SIZE))))
+  (func $uri_scratch (param $ws i32) (result i32)
+    ;; behind the deferred-ref table
+    (i32.add (i32.add (local.get $ws) (call $cw (local.get $ws) (global.get $CWH_DREF_OFFSET))) (i32.mul (call $cw (local.get $ws) (global.get $CWH_DREF_CAP)) (global.get $CW_DREF_SIZE))))
+
+  ;; Find a resource by absolute URI; -1 when unknown.
+  (func $find_resource (param $ws i32) (param $uri i32) (param $len i32) (result i32)
+    (local $i i32) (local $count i32) (local $r i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_RES_COUNT)))
+    (block $done (loop $l
+        (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $r (call $res_addr (local.get $ws) (local.get $i)))
+      (if (i32.eq (i32.load offset=4 (local.get $r)) (local.get $len))
+        (then
+          (if (call $bytes_equal (call $arena_str_addr (local.get $ws) (i32.load (local.get $r))) (local.get $uri) (local.get $len))
+            (then (return (local.get $i))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.const -1))
+
+  ;; Register a resource with the absolute URI at [uri, uri+len) rooted at
+  ;; schema offset $voff (node $id). Duplicate URIs are a schema error.
+  (func $add_resource (param $ws i32) (param $uri i32) (param $len i32) (param $voff i32) (param $id i32) (result i32)
+    (local $count i32) (local $r i32) (local $s i32) (local $existing i32)
+    ;; a document declared by the bundle and again by its own $id is one
+    ;; resource; a second declaration elsewhere keeps the first
+    (local.set $existing (call $find_resource (local.get $ws) (local.get $uri) (local.get $len)))
+    (if (i32.ge_s (local.get $existing) (i32.const 0))
+      (then
+        (local.set $r (call $res_addr (local.get $ws) (local.get $existing)))
+        (if (i32.eq (i32.load offset=8 (local.get $r)) (local.get $voff))
+          (then (i32.store offset=12 (local.get $r) (local.get $id))))
+        (return (local.get $existing))))
+    (call $append_resource (local.get $ws) (local.get $uri) (local.get $len) (local.get $voff) (local.get $id)))
+
+  ;; Append a resource record without URI dedup: a set route shares the
+  ;; bundle's base URI with every other route yet is its own document.
+  (func $append_resource (param $ws i32) (param $uri i32) (param $len i32) (param $voff i32) (param $id i32) (result i32)
+    (local $count i32) (local $r i32) (local $s i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_RES_COUNT)))
+    (if (i32.ge_u (local.get $count) (call $cw (local.get $ws) (global.get $CWH_RES_CAP)))
+      (then (return (i32.sub (i32.const 0) (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (global.get $KW_ID) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED))))))
+    (local.set $s (call $arena_string (local.get $ws) (local.get $uri) (local.get $len)))
+    (if (i32.lt_s (local.get $s) (i32.const 0))
+      (then (return (i32.sub (i32.const 0) (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (global.get $KW_ID) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED))))))
+    (local.set $r (call $res_addr (local.get $ws) (local.get $count)))
+    (i32.store (local.get $r) (local.get $s))
+    (i32.store offset=4 (local.get $r) (local.get $len))
+    (i32.store offset=8 (local.get $r) (local.get $voff))
+    (i32.store offset=12 (local.get $r) (local.get $id))
+    (call $cw_set (local.get $ws) (global.get $CWH_RES_COUNT) (i32.add (local.get $count) (i32.const 1)))
+    (local.get $count))
+
+  (func $add_anchor (param $ws i32) (param $resource i32) (param $name i32) (param $len i32) (param $voff i32) (param $id i32) (param $dynamic i32) (result i32)
+    (local $count i32) (local $a i32) (local $s i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_ANCHOR_COUNT)))
+    (if (i32.ge_u (local.get $count) (call $cw (local.get $ws) (global.get $CWH_ANCHOR_CAP)))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (i32.const 6) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (local.set $s (call $arena_string (local.get $ws) (local.get $name) (local.get $len)))
+    (if (i32.lt_s (local.get $s) (i32.const 0))
+      (then (return (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (i32.const 6) (local.get $voff) (global.get $STATUS_LIMIT_EXCEEDED)))))
+    (local.set $a (call $anchor_addr (local.get $ws) (local.get $count)))
+    (i32.store (local.get $a) (local.get $resource))
+    (i32.store offset=4 (local.get $a) (local.get $s))
+    (i32.store offset=8 (local.get $a) (local.get $len))
+    (i32.store offset=12 (local.get $a) (local.get $voff))
+    (i32.store offset=16 (local.get $a) (i32.or (i32.shl (local.get $id) (i32.const 1)) (local.get $dynamic)))
+    (call $cw_set (local.get $ws) (global.get $CWH_ANCHOR_COUNT) (i32.add (local.get $count) (i32.const 1)))
+    (global.get $STATUS_OK))
+
+  ;; Anchor lookup: (resource, name) → anchor index or -1. $dynamic_only
+  ;; restricts to dynamic anchors.
+  (func $find_anchor (param $ws i32) (param $resource i32) (param $name i32) (param $len i32) (param $dynamic_only i32) (result i32)
+    (local $i i32) (local $count i32) (local $a i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_ANCHOR_COUNT)))
+    (block $done (loop $l
+        (call $work_add (i32.const 1))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $a (call $anchor_addr (local.get $ws) (local.get $i)))
+      (if (i32.and (i32.eq (i32.load (local.get $a)) (local.get $resource))
+                   (i32.and (i32.eq (i32.load offset=8 (local.get $a)) (local.get $len))
+                            (i32.or (i32.eqz (local.get $dynamic_only)) (i32.and (i32.load offset=16 (local.get $a)) (i32.const 1)))))
+        (then
+          (if (call $bytes_equal (call $arena_str_addr (local.get $ws) (i32.load offset=4 (local.get $a))) (local.get $name) (local.get $len))
+            (then (return (local.get $i))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.const -1))
+
+  ;; Queue a $ref / $dynamicRef for resolution after the walk. Returns the
+  ;; entry index or a negated status.
+  (func $add_deferred_ref (param $ws i32) (param $ref_voff i32) (param $resource i32) (param $code_offset i32) (param $dynamic i32) (result i32)
+    (local $count i32) (local $d i32)
+    (local.set $count (call $cw (local.get $ws) (global.get $CWH_DREF_COUNT)))
+    (if (i32.ge_u (local.get $count) (call $cw (local.get $ws) (global.get $CWH_DREF_CAP)))
+      (then (return (i32.sub (i32.const 0) (call $diag (local.get $ws) (global.get $DIAG_TABLE_SIZE) (global.get $KW_REF) (local.get $ref_voff) (global.get $STATUS_LIMIT_EXCEEDED))))))
+    (local.set $d (call $dref_addr (local.get $ws) (local.get $count)))
+    (i32.store (local.get $d) (local.get $ref_voff))
+    (i32.store offset=4 (local.get $d) (local.get $resource))
+    (i32.store offset=8 (local.get $d) (local.get $code_offset))
+    (i32.store offset=12 (local.get $d) (i32.const -1))
+    (i32.store offset=16 (local.get $d) (i32.const -1))
+    (i32.store offset=20 (local.get $d) (local.get $dynamic))
+    (call $cw_set (local.get $ws) (global.get $CWH_DREF_COUNT) (i32.add (local.get $count) (i32.const 1)))
+    (local.get $count))
+
+  ;; JSON pointer navigation from a schema offset (generalizes the root
+  ;; form): returns the target schema offset or -1.
+  (func $navigate_pointer (param $ws i32) (param $start i32) (param $ptr i32) (param $len i32) (result i32)
+    (local $end i32) (local $seg i32) (local $seg_end i32) (local $cur i32) (local $schema i32) (local $send i32)
+    (local $kind i32) (local $h i32) (local $n i32) (local $decoded i32) (local $scratch i32) (local $found i32)
+    (local $index i32) (local $i i32) (local $b i32)
+    (local.set $schema (call $schema_addr (local.get $ws)))
+    (local.set $send (call $schema_end (local.get $ws)))
+    (local.set $cur (local.get $start))
+    (if (i32.eqz (local.get $len)) (then (return (local.get $cur))))
+    (if (i32.ne (i32.load8_u (local.get $ptr)) (i32.const 47)) (then (return (i32.const -1))))
+    (local.set $scratch (i32.add (call $pointer_base (local.get $ws)) (global.get $MAX_POINTER_BYTES)))
+    (local.set $seg (i32.add (local.get $ptr) (i32.const 1)))
+    (local.set $end (i32.add (local.get $ptr) (local.get $len)))
+    (block $done (loop $loop
+        (call $work_add (i32.const 1))
+      (local.set $seg_end (local.get $seg))
+      (block $find (loop $fl
+        (call $work_add (i32.const 1))
+        (br_if $find (i32.ge_u (local.get $seg_end) (local.get $end)))
+        (br_if $find (i32.eq (i32.load8_u (local.get $seg_end)) (i32.const 47)))
+        (local.set $seg_end (i32.add (local.get $seg_end) (i32.const 1)))
+        (br $fl)))
+      (if (i32.gt_u (i32.sub (local.get $seg_end) (local.get $seg)) (global.get $MAX_POINTER_BYTES)) (then (return (i32.const -1))))
+      (local.set $decoded (call $decode_segment (local.get $ws) (local.get $seg) (i32.sub (local.get $seg_end) (local.get $seg)) (local.get $scratch)))
+      (if (i32.lt_s (local.get $decoded) (i32.const 0)) (then (return (i32.const -1))))
+      (call $mp_header (i32.add (local.get $schema) (local.get $cur)) (local.get $send)) (local.set $n) (local.set $h) (local.set $kind)
+      (if (i32.eq (local.get $kind) (global.get $K_MAP))
+        (then
+          (local.set $found (call $mp_map_find (i32.add (local.get $schema) (local.get $cur)) (local.get $send) (local.get $scratch) (local.get $decoded)))
+          (if (i32.lt_s (local.get $found) (i32.const 0)) (then (return (i32.const -1))))
+          (local.set $cur (i32.sub (local.get $found) (local.get $schema))))
+        (else
+          (if (i32.ne (local.get $kind) (global.get $K_ARRAY)) (then (return (i32.const -1))))
+          (if (i32.eqz (local.get $decoded)) (then (return (i32.const -1))))
+          (if (i32.and (i32.gt_u (local.get $decoded) (i32.const 1)) (i32.eq (i32.load8_u (local.get $scratch)) (i32.const 48)))
+            (then (return (i32.const -1))))
+          (local.set $index (i32.const 0))
+          (local.set $i (i32.const 0))
+          (block $pd (loop $pl
+        (call $work_add (i32.const 1))
+            (br_if $pd (i32.ge_u (local.get $i) (local.get $decoded)))
+            (local.set $b (i32.load8_u (i32.add (local.get $scratch) (local.get $i))))
+            (if (i32.or (i32.lt_u (local.get $b) (i32.const 48)) (i32.gt_u (local.get $b) (i32.const 57))) (then (return (i32.const -1))))
+            (if (i32.gt_u (local.get $index) (i32.const 100000000)) (then (return (i32.const -1))))
+            (local.set $index (i32.add (i32.mul (local.get $index) (i32.const 10)) (i32.sub (local.get $b) (i32.const 48))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $pl)))
+          (if (i32.ge_u (local.get $index) (local.get $n)) (then (return (i32.const -1))))
+          (local.set $found (i32.add (i32.add (local.get $schema) (local.get $cur)) (local.get $h)))
+          (local.set $i (i32.const 0))
+          (block $sd (loop $sl
+        (call $work_add (i32.const 1))
+            (br_if $sd (i32.ge_u (local.get $i) (local.get $index)))
+            (local.set $found (call $mp_skip (local.get $found) (local.get $send)))
+            (if (i32.lt_s (local.get $found) (i32.const 0)) (then (return (i32.const -1))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $sl)))
+          (local.set $cur (i32.sub (local.get $found) (local.get $schema)))))
+      (br_if $done (i32.ge_u (local.get $seg_end) (local.get $end)))
+      (local.set $seg (i32.add (local.get $seg_end) (i32.const 1)))
+      (br $loop)))
+    (local.get $cur))
+
+  ;; Resolve one deferred reference against the tables. Writes the target
+  ;; schema offset and resource into the entry. Returns 1 resolved, 0 not
+  ;; (yet) resolvable, or a negated status on a malformed reference.
+  (func $resolve_deferred (param $ws i32) (param $index i32) (result i32)
+    (local $d i32) (local $ref_voff i32) (local $kind i32) (local $h i32) (local $n i32) (local $ref i32) (local $res i32) (local $base i32)
+    (local $scratch i32) (local $out i32) (local $out_len i32) (local $frag i32) (local $target_res i32) (local $frag_len i32) (local $target i32)
+    (local $rend i32) (local $anchor i32) (local $a i32)
+    (local.set $d (call $dref_addr (local.get $ws) (local.get $index)))
+    (local.set $ref_voff (i32.load (local.get $d)))
+    (call $sv (local.get $ws) (local.get $ref_voff)) (local.set $n) (local.set $h) (local.set $kind)
+    (local.set $ref (i32.add (i32.add (call $schema_addr (local.get $ws)) (local.get $ref_voff)) (local.get $h)))
+    (local.set $rend (i32.add (local.get $ref) (local.get $n)))
+    (local.set $res (call $res_addr (local.get $ws) (i32.load offset=4 (local.get $d))))
+    (local.set $base (call $arena_str_addr (local.get $ws) (i32.load (local.get $res))))
+    (local.set $scratch (call $uri_scratch (local.get $ws)))
+    (local.set $out (i32.add (local.get $scratch) (i32.const 64)))
+    (call $uri_resolve (local.get $base) (i32.load offset=4 (local.get $res)) (local.get $ref) (local.get $n)
+                       (local.get $out) (i32.sub (global.get $CW_URI_SCRATCH) (i32.const 64)) (local.get $scratch) (i32.add (local.get $scratch) (i32.const 32)))
+    (local.set $frag)
+    (local.set $out_len)
+    (if (i32.lt_s (local.get $out_len) (i32.const 0))
+      (then (return (i32.sub (i32.const 0) (call $diag (local.get $ws) (global.get $DIAG_REF_UNRESOLVABLE) (global.get $KW_REF) (local.get $ref_voff) (global.get $STATUS_SYNTAX_ERROR))))))
+    ;; a reference into its own document stays in that document — set
+    ;; routes share one base URI but are distinct resources
+    (local.set $target_res (i32.const -1))
+    (if (i32.eq (local.get $out_len) (i32.load offset=4 (local.get $res)))
+      (then
+        (if (call $bytes_equal (local.get $out) (local.get $base) (local.get $out_len))
+          (then (local.set $target_res (i32.load offset=4 (local.get $d)))))))
+    (if (i32.lt_s (local.get $target_res) (i32.const 0))
+      (then (local.set $target_res (call $find_resource (local.get $ws) (local.get $out) (local.get $out_len)))))
+    (if (i32.lt_s (local.get $target_res) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $target (i32.load offset=8 (call $res_addr (local.get $ws) (local.get $target_res))))
+    (if (i32.ge_s (local.get $frag) (i32.const 0))
+      (then
+        (local.set $frag_len (i32.sub (local.get $rend) (local.get $frag)))
+        (if (local.get $frag_len)
+          (then
+            (if (i32.eq (i32.load8_u (local.get $frag)) (i32.const 47))
+              (then
+                (local.set $target (call $navigate_pointer (local.get $ws) (local.get $target) (local.get $frag) (local.get $frag_len)))
+                (if (i32.lt_s (local.get $target) (i32.const 0))
+                  (then (return (i32.sub (i32.const 0) (call $diag (local.get $ws) (global.get $DIAG_REF_UNRESOLVABLE) (global.get $KW_REF) (local.get $ref_voff) (global.get $STATUS_SYNTAX_ERROR)))))))
+              (else
+                (local.set $anchor (call $find_anchor (local.get $ws) (local.get $target_res) (local.get $frag) (local.get $frag_len) (i32.const 0)))
+                (if (i32.lt_s (local.get $anchor) (i32.const 0)) (then (return (i32.const 0))))
+                (local.set $target (i32.load offset=12 (call $anchor_addr (local.get $ws) (local.get $anchor))))))))))
+    (i32.store offset=12 (local.get $d) (local.get $target))
+    (i32.store offset=16 (local.get $d) (local.get $target_res))
+    (i32.const 1))
+
+
+  ;; Source-owned work accounting. Per-call globals are transient, not continuation
+  ;; state; entry/exit wrappers restore/store the caller-owned u64 total. No import
+  ;; calls back into schema. Overflow saturates and stays set until initialization.
+  (global $work_active (mut i32) (i32.const 0))
+  (global $work_total (mut i64) (i64.const 0))
+  (global $work_overflow (mut i32) (i32.const 0))
+  (global $work_pending (mut i64) (i64.const 0))
+  (func $work_begin (param $meter i32) (param $initialize i32)
+    (local $pending i64)
+    (global.set $work_total (i64.const 0))
+    (global.set $work_overflow (i32.const 0))
+    (global.set $work_pending (i64.const 0))
+    (if (i32.eqz (local.get $initialize))
+      (then
+        (global.set $work_total (i64.load (local.get $meter)))
+        (global.set $work_overflow (i32.load offset=8 (local.get $meter)))
+        (if (global.get $work_overflow)
+          (then (global.set $work_total (i64.const -1))))
+        (local.set $pending (i64.load offset=16 (local.get $meter)))
+        (global.set $work_pending (select (i64.const 0x100000000) (local.get $pending)
+          (i64.gt_u (local.get $pending) (i64.const 0x100000000))))))
+    (global.set $work_active (i32.const 1)))
+  (func $work_add (param $n i32)
+    (call $work_add64 (i64.extend_i32_u (local.get $n))))
+  (func $work_add64 (param $n i64)
+    (local $sum i64) (local $debt i64)
+    (if (i32.eqz (global.get $work_active)) (then (return)))
+    (local.set $sum (i64.add (global.get $work_total) (local.get $n)))
+    (if (i64.lt_u (local.get $sum) (global.get $work_total))
+      (then (global.set $work_overflow (i32.const 1))))
+    (global.set $work_total (select (i64.const -1) (local.get $sum) (global.get $work_overflow)))
+    (local.set $debt (select (i64.const 0x100000000) (local.get $n)
+      (i64.gt_u (local.get $n) (i64.const 0x100000000))))
+    (local.set $sum (i64.add (global.get $work_pending) (local.get $debt)))
+    (global.set $work_pending (select (i64.const 0x100000000) (local.get $sum)
+      (i64.gt_u (local.get $sum) (i64.const 0x100000000)))))
+  (func $work_take (param $fuel i32) (result i32)
+    (local $remaining i64)
+    (local.set $remaining (i64.sub (i64.extend_i32_s (local.get $fuel)) (global.get $work_pending)))
+    (global.set $work_pending (i64.const 0))
+    (if (i64.lt_s (local.get $remaining) (i64.const -2147483648))
+      (then (return (i32.const -2147483648))))
+    (i32.wrap_i64 (local.get $remaining)))
+  (func $work_end (param $meter i32) (param $legacy i32)
+    (i64.store (local.get $meter) (global.get $work_total))
+    (i32.store offset=8 (local.get $meter) (global.get $work_overflow))
+    (i64.store offset=16 (local.get $meter) (global.get $work_pending))
+    ;; The legacy accessor saturates at INT_MAX, never wraps/sign-flips.
+    (i32.store (local.get $legacy)
+      (select (i32.const 0x7fffffff) (i32.wrap_i64 (global.get $work_total))
+        (i64.gt_u (global.get $work_total) (i64.const 0x7fffffff))))
+    (global.set $work_active (i32.const 0)))
+  (func $work_copy (param $dst i32) (param $src i32) (param $bytes i32)
+    (call $work_add (call $bulk_charge (local.get $bytes)))
+    (memory.copy (local.get $dst) (local.get $src) (local.get $bytes)))
+  (func $work_zero (param $dst i32) (param $value i32) (param $bytes i32)
+    (call $work_add (call $bulk_charge (local.get $bytes)))
+    (memory.fill (local.get $dst) (local.get $value) (local.get $bytes)))
+  (func (export "compile_work_charged") (param $ws i32) (result i64)
+    (i64.load offset=320 (local.get $ws)))
+  (func (export "compile_work_overflow") (param $ws i32) (result i32)
+    (i32.load offset=328 (local.get $ws)))
+  (func (export "validation_work_charged") (param $cont i32) (result i64)
+    (i64.load offset=144 (local.get $cont)))
+  (func (export "validation_work_overflow") (param $cont i32) (result i32)
+    (i32.load offset=152 (local.get $cont)))
+
+  (func $finish_resources (param $ws i32) (param $fuel i32) (result i32 i32)
+    (local $status i32)
+    (loop $next
+      (local.set $fuel (call $work_take (local.get $fuel)))
+      (if (i32.le_s (local.get $fuel) (i32.const 0))
+        (then (return (global.get $STATUS_PAUSED) (local.get $fuel))))
+      (local.set $status (call $finalize_resources (local.get $ws)))
+      (if (i32.ne (local.get $status) (global.get $STATUS_PAUSED))
+        (then (return (local.get $status) (call $work_take (local.get $fuel)))))
+      (br $next))
+    (unreachable))
+
+  (func $measure_schema (export "measure_schema") (param $schema i32) (param $schema_bytes i32) (param $ws i32) (param $ws_capacity i32) (param $options i32) (param $initialize i32) (param $fuel i32) (result i32 i32)
+    (local $status i32)
+    (if (i32.lt_u (local.get $ws_capacity) (global.get $CW_HEADER_SIZE))
+      (then (return (global.get $STATUS_BUFFER_TOO_SMALL) (local.get $fuel))))
+    (if (i32.eqz (local.get $initialize))
+      (then
+        (local.set $status (call $cw_check (local.get $ws) (local.get $ws_capacity)))
+        (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))))
+    (call $work_begin (i32.add (local.get $ws) (i32.const 320)) (local.get $initialize))
+    (if (local.get $initialize) (then (i32.store (local.get $ws) (i32.const 0))))
+    (call $measure_schema_impl (local.get $schema) (local.get $schema_bytes) (local.get $ws) (local.get $ws_capacity) (local.get $options) (local.get $initialize) (local.get $fuel))
+    (local.set $fuel)
+    (local.set $status)
+    (local.set $fuel (call $work_take (local.get $fuel)))
+    (call $work_end (i32.add (local.get $ws) (i32.const 320))
+      (i32.add (local.get $ws) (i32.const 112)))
+    (local.get $status) (local.get $fuel))
+
+  (func $emit_program (export "emit_program") (param $ws i32) (param $ws_capacity i32) (param $schema i32) (param $program i32) (param $fuel i32) (result i32 i32)
+    (local $status i32)
+    (local.set $status (call $cw_check (local.get $ws) (local.get $ws_capacity)))
+    (if (local.get $status) (then (return (local.get $status) (local.get $fuel))))
+    (call $work_begin (i32.add (local.get $ws) (i32.const 320)) (i32.const 0))
+    (call $emit_program_impl (local.get $ws) (local.get $ws_capacity) (local.get $schema) (local.get $program) (local.get $fuel))
+    (local.set $fuel)
+    (local.set $status)
+    (local.set $fuel (call $work_take (local.get $fuel)))
+    (call $work_end (i32.add (local.get $ws) (i32.const 320))
+      (i32.add (local.get $ws) (i32.const 112)))
+    (local.get $status) (local.get $fuel))
+
+  (func $initialize_emission (export "initialize_emission") (param $mws i32) (param $ws i32) (param $ws_capacity i32) (param $program i32) (param $program_capacity i32) (result i32)
+    (local $status i32)
+    (if (i32.lt_u (local.get $ws_capacity) (global.get $CW_HEADER_SIZE))
+      (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (if (i32.ne (call $cw (local.get $mws) (global.get $CWH_VERSION)) (global.get $CW_VERSION))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.ne (call $cw (local.get $mws) (global.get $CWH_PASS)) (global.get $PASS_COMPLETE))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM))))
+    (if (i32.lt_u (local.get $ws_capacity) (call $emission_workspace_size (local.get $mws)))
+      (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (if (i32.lt_u (local.get $program_capacity) (call $measured_program_size (local.get $mws)))
+      (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (call $work_begin (i32.add (local.get $ws) (i32.const 320)) (i32.const 1))
+    (call $initialize_emission_impl (local.get $mws) (local.get $ws) (local.get $ws_capacity) (local.get $program) (local.get $program_capacity))
+    (local.set $status)
+    (call $work_end (i32.add (local.get $ws) (i32.const 320))
+      (i32.add (local.get $ws) (i32.const 112)))
+    (local.get $status))
+
+  (func $initialize_validation (export "initialize_validation") (param $program i32) (param $program_capacity i32) (param $document i32) (param $document_bytes i32) (param $mode i32) (param $max_depth i32) (param $error_capacity i32) (param $arena_bytes i32) (param $cont i32) (param $cont_capacity i32) (result i32)
+    (local $status i32)
+    (if (i32.lt_u (local.get $cont_capacity) (global.get $CONT_HEADER_SIZE))
+      (then (return (global.get $STATUS_BUFFER_TOO_SMALL))))
+    (call $work_begin (i32.add (local.get $cont) (i32.const 144)) (i32.const 1))
+    (i32.store (local.get $cont) (i32.const 0))
+    (call $initialize_validation_impl (local.get $program) (local.get $program_capacity) (local.get $document) (local.get $document_bytes) (local.get $mode) (local.get $max_depth) (local.get $error_capacity) (local.get $arena_bytes) (local.get $cont) (local.get $cont_capacity))
+    (local.set $status)
+    (call $work_end (i32.add (local.get $cont) (i32.const 144))
+      (i32.add (local.get $cont) (i32.const 96)))
+    (local.get $status))
+
+  (func $run_validation (export "run_validation") (param $cont i32) (param $capacity i32) (param $fuel i32) (result i32 i32)
+    (local $status i32)
+    (if (i32.lt_u (local.get $capacity) (global.get $CONT_HEADER_SIZE))
+      (then (return (global.get $STATUS_BUFFER_TOO_SMALL) (local.get $fuel))))
+    (if (i32.or
+          (i32.ne (call $ch (local.get $cont) (global.get $CH_MAGIC)) (global.get $CONT_MAGIC))
+          (i32.ne (call $ch (local.get $cont) (global.get $CH_VERSION)) (global.get $CONT_VERSION)))
+      (then (return (global.get $STATUS_CORRUPT_PROGRAM) (local.get $fuel))))
+    ;; A zero grant never spends pending setup debt or starts a gate pass.
+    (if (i32.le_s (local.get $fuel) (i32.const 0))
+      (then (return (call $run_validation_impl (local.get $cont) (local.get $capacity) (local.get $fuel)))))
+    (call $work_begin (i32.add (local.get $cont) (i32.const 144)) (i32.const 0))
+    (call $run_validation_impl (local.get $cont) (local.get $capacity) (local.get $fuel))
+    (local.set $fuel)
+    (local.set $status)
+    (local.set $fuel (call $work_take (local.get $fuel)))
+    (call $work_end (i32.add (local.get $cont) (i32.const 144))
+      (i32.add (local.get $cont) (i32.const 96)))
+    (local.get $status) (local.get $fuel))
+
+
+  (func $work_regex (param $before i64) (param $after i64) (param $overflow i32)
+    (if (i32.eqz (global.get $work_active)) (then (return)))
+    (if (i32.or (local.get $overflow) (i64.lt_u (local.get $after) (local.get $before)))
+      (then
+        ;; Explicit source overflow (or an incompatible regressing source
+        ;; counter), never an ordinary signed scheduling overrun.
+        (global.set $work_total (i64.const -1))
+        (global.set $work_overflow (i32.const 1))
+        (global.set $work_pending (i64.const 0x100000000))
+        (return)))
+    (call $work_add64 (i64.sub (local.get $after) (local.get $before))))
+
+  (func $regex_validate_program (param $program i32) (param $capacity i32) (result i32)
+    (local $status i32) (local $work i64) (local $overflow i32)
+    (call $regex_validate_program_work (local.get $program) (local.get $capacity))
+    (local.set $overflow) (local.set $work) (local.set $status)
+    (call $work_regex (i64.const 0) (local.get $work) (local.get $overflow))
+    (local.get $status))
+
+
+  ;; Mirrors REGEX_CONTINUATION.WORK_BYTES. PROGRAM v2 deliberately retains
+  ;; its original regex footprint; only runtime continuation layout extends it.
+  (global $REGEX_CONTINUATION_WORK_BYTES i32 (i32.const 24))
+  (func $regex_runtime_capacity (param $program i32) (result i32)
+    (local $bytes i32)
+    (local.set $bytes (call $ph (local.get $program) (global.get $PH_MAX_REGEX_CONTINUATION)))
+    (if (i32.eqz (local.get $bytes)) (then (return (i32.const 0))))
+    ;; Includes align8 headroom and keeps signed sizing failure unambiguous.
+    (if (i32.gt_u (local.get $bytes) (i32.sub (i32.const 0x7ffffff8) (global.get $REGEX_CONTINUATION_WORK_BYTES)))
+      (then (return (i32.const -1))))
+    (i32.add (local.get $bytes) (global.get $REGEX_CONTINUATION_WORK_BYTES)))
+
+  ;; Direct owners are checked before dereferencing. All arithmetic here is
+  ;; unsigned and bounded by the module's 1 GiB memory maximum.
+  (func $direct_span (param $p i32) (param $n i32) (param $aligned i32) (result i32)
+    (i32.and
+      (i32.or (i32.eqz (local.get $aligned)) (i32.eqz (i32.and (local.get $p) (i32.const 7))))
+      (i64.le_u (i64.add (i64.extend_i32_u (local.get $p)) (i64.extend_i32_u (local.get $n)))
+        (i64.shl (i64.extend_i32_u (memory.size)) (i64.const 16)))))
+
+  (func $direct_disjoint (param $a i32) (param $an i32) (param $b i32) (param $bn i32) (result i32)
+    (i32.or (i32.or (i32.eqz (local.get $an)) (i32.eqz (local.get $bn)))
+      (i32.or
+        (i64.le_u (i64.add (i64.extend_i32_u (local.get $a)) (i64.extend_i32_u (local.get $an))) (i64.extend_i32_u (local.get $b)))
+        (i64.le_u (i64.add (i64.extend_i32_u (local.get $b)) (i64.extend_i32_u (local.get $bn))) (i64.extend_i32_u (local.get $a))))))
+
+  (func $pool_array_ok (param $program i32) (param $off i32) (param $count i32) (param $stride i32) (result i32)
+    (local $bytes i64)
+    (local.set $bytes (i64.mul (i64.extend_i32_u (local.get $count)) (i64.extend_i32_u (local.get $stride))))
+    (if (i64.gt_u (local.get $bytes) (i64.const 0x40000000)) (then (return (i32.const 0))))
+    (call $pool_ok (local.get $program) (local.get $off) (i32.wrap_i64 (local.get $bytes))))
+
+  ;; Required/dependency list elements are hash-table SLOT indices, not nodes.
+  (func $object_entry_ok (param $program i32) (param $entries i32) (param $cap i32) (param $slot i32) (result i32)
+    (if (i32.ge_u (local.get $slot) (local.get $cap)) (then (return (i32.const 0))))
+    (i32.ne (i32.load offset=4 (i32.add (i32.add (local.get $program) (local.get $entries))
+      (i32.mul (local.get $slot) (i32.const 20)))) (global.get $NONE)))
+
+  ;; Resource/route/gate tables are followed by both validation and rendering.
+  ;; Checking just their outer ranges misses nested lists and out-of-range bits.
+  (func $program_tables_ok (param $p i32) (result i32)
+    (local $table i32) (local $count i32) (local $i i32) (local $e i32)
+    (local $list i32) (local $n i32) (local $j i32) (local $q i32)
+    (local $routes i32) (local $cap i32) (local $empty i32) (local $bits i32) (local $words i32)
+    (local.set $table (i32.load offset=40 (local.get $p)))
+    (local.set $count (i32.load offset=44 (local.get $p)))
+    (if (local.get $count)
+      (then
+        (if (i32.eqz (call $pool_array_ok (local.get $p) (local.get $table) (local.get $count) (i32.const 8))) (then (return (i32.const 0))))
+        (block $rd (loop $rl
+          (br_if $rd (i32.ge_u (local.get $i) (local.get $count)))
+          (call $work_add (i32.const 1))
+          (local.set $e (i32.add (i32.add (local.get $p) (local.get $table)) (i32.shl (local.get $i) (i32.const 3))))
+          (if (i32.eqz (call $pool_string_ok (local.get $p) (i32.load (local.get $e)))) (then (return (i32.const 0))))
+          (local.set $list (i32.load offset=4 (local.get $e)))
+          (if (i32.eqz (call $pool_ok (local.get $p) (local.get $list) (i32.const 4))) (then (return (i32.const 0))))
+          (local.set $n (i32.load (i32.add (local.get $p) (local.get $list))))
+          (if (i32.eqz (call $pool_array_ok (local.get $p) (i32.add (local.get $list) (i32.const 4)) (local.get $n) (i32.const 8))) (then (return (i32.const 0))))
+          (local.set $j (i32.const 0))
+          (block $ad (loop $al
+            (br_if $ad (i32.ge_u (local.get $j) (local.get $n)))
+            (call $work_add (i32.const 1))
+            (local.set $q (i32.add (i32.add (local.get $p) (local.get $list)) (i32.add (i32.const 4) (i32.shl (local.get $j) (i32.const 3)))))
+            (if (i32.eqz (call $pool_string_ok (local.get $p) (i32.load (local.get $q)))) (then (return (i32.const 0))))
+            (if (i32.eqz (call $node_ok (local.get $p) (i32.load offset=4 (local.get $q)))) (then (return (i32.const 0))))
+            (local.set $j (i32.add (local.get $j) (i32.const 1)))
+            (br $al)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $rl)))))
+    (local.set $routes (i32.load offset=68 (local.get $p)))
+    (if (i32.eqz (local.get $routes)) (then (return (i32.const 1))))
+    (local.set $i (i32.const 0))
+    (block $td (loop $tl
+      (br_if $td (i32.ge_u (local.get $i) (local.get $routes)))
+      (call $work_add (i32.const 1))
+      (if (i32.eqz (call $node_ok (local.get $p) (i32.load (call $prog_route_entry (local.get $p) (local.get $i))))) (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $tl)))
+    (local.set $cap (i32.load offset=76 (local.get $p)))
+    (if (i32.eqz (local.get $cap)) (then (return (i32.const 1))))
+    (local.set $table (i32.load offset=72 (local.get $p)))
+    (local.set $words (i32.shr_u (i32.add (local.get $routes) (i32.const 31)) (i32.const 5)))
+    (local.set $i (i32.const 0))
+    (block $gd (loop $gl
+      (br_if $gd (i32.ge_u (local.get $i) (local.get $cap)))
+      (call $work_add (i32.const 1))
+      (local.set $e (i32.add (i32.add (local.get $p) (local.get $table)) (i32.mul (local.get $i) (i32.const 20))))
+      (if (i32.eqz (i32.load offset=4 (local.get $e)))
+        (then (local.set $empty (i32.const 1)))
+        (else
+          (if (i32.eqz (call $pool_string_ok (local.get $p) (i32.load offset=4 (local.get $e)))) (then (return (i32.const 0))))
+          (if (i32.ne (i32.load offset=8 (local.get $e)) (global.get $NONE))
+            (then (if (i32.eqz (call $pool_value_ok (local.get $p) (i32.load offset=8 (local.get $e)))) (then (return (i32.const 0))))))
+          (local.set $bits (i32.load offset=16 (local.get $e)))
+          (if (i32.eqz (call $pool_array_ok (local.get $p) (local.get $bits) (local.get $words) (i32.const 4))) (then (return (i32.const 0))))
+          (if (i32.and (local.get $routes) (i32.const 31))
+            (then
+              (if (i32.shr_u (i32.load (i32.add (i32.add (local.get $p) (local.get $bits))
+                (i32.shl (i32.sub (local.get $words) (i32.const 1)) (i32.const 2))))
+                (i32.and (local.get $routes) (i32.const 31))) (then (return (i32.const 0))))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $gl)))
+    (local.get $empty))
+
+  ;; Aggregate records are independent of each compiler/validator meter.
+  ;; Flags: 1 facade unlimited, 2 facade terminal-atomic compatibility.
+  (func $initialize_work_budget (export "initialize_work_budget")
+    (param $b i32) (param $capacity i32) (param $allowance i64) (param $flags i32) (result i32)
+    (if (i32.eqz (call $direct_span (local.get $b) (local.get $capacity) (i32.const 1))) (then (return (i32.const 12))))
+    (if (i32.lt_u (local.get $capacity) (i32.const 48)) (then (return (i32.const 7))))
+    (if (i32.or (i32.gt_u (local.get $flags) (i32.const 3))
+      (i32.and (i32.eqz (i32.and (local.get $flags) (i32.const 1))) (i64.eq (local.get $allowance) (i64.const -1))))
+      (then (return (i32.const 12))))
+    (memory.fill (local.get $b) (i32.const 0) (i32.const 48))
+    (i32.store (local.get $b) (i32.const 0x42575353))
+    (i32.store offset=4 (local.get $b) (i32.const 1))
+    (i32.store offset=8 (local.get $b) (local.get $flags))
+    (i64.store offset=16 (local.get $b) (local.get $allowance))
+    (i32.store offset=40 (local.get $b) (i32.const -1))
+    (i32.const 0))
+
+  (func $direct_budget_check (param $b i32) (result i32)
+    (if (i32.eqz (call $direct_span (local.get $b) (i32.const 48) (i32.const 1))) (then (return (i32.const 12))))
+    (if (i32.or (i32.ne (i32.load (local.get $b)) (i32.const 0x42575353))
+      (i32.or (i32.ne (i32.load offset=4 (local.get $b)) (i32.const 1))
+        (i32.gt_u (i32.load offset=8 (local.get $b)) (i32.const 3)))) (then (return (i32.const 12))))
+    (if (i32.and (i32.eqz (i32.and (i32.load offset=8 (local.get $b)) (i32.const 1)))
+      (i64.eq (i64.load offset=16 (local.get $b)) (i64.const -1))) (then (return (i32.const 12))))
+    (if (i32.or (i32.load offset=12 (local.get $b)) (i32.load offset=44 (local.get $b)))
+      (then (i32.store offset=12 (local.get $b) (i32.const 11)) (return (i32.const 11))))
+    (i32.const 0))
+
+  (func $direct_gate (param $b i32) (param $phase i32) (result i32)
+    (if (i32.load offset=12 (local.get $b)) (then (return (i32.const 11))))
+    (i32.store offset=32 (local.get $b) (local.get $phase))
+    (if (i32.and (i32.eqz (i32.and (i32.load offset=8 (local.get $b)) (i32.const 1)))
+      (i64.ge_u (i64.load offset=24 (local.get $b)) (i64.load offset=16 (local.get $b))))
+      (then (i32.store offset=12 (local.get $b) (i32.const 11)) (return (i32.const 11))))
+    (i32.const 0))
+
+  (func $direct_grant (param $b i32) (param $cap i32) (result i32)
+    (local $remaining i64)
+    (if (i32.eqz (local.get $cap)) (then (local.set $cap (i32.const 0x40000000))))
+    (if (i32.and (i32.load offset=8 (local.get $b)) (i32.const 1)) (then (return (local.get $cap))))
+    (local.set $remaining (i64.sub (i64.load offset=16 (local.get $b)) (i64.load offset=24 (local.get $b))))
+    (i32.wrap_i64 (select (local.get $remaining) (i64.extend_i32_u (local.get $cap))
+      (i64.lt_u (local.get $remaining) (i64.extend_i32_u (local.get $cap))))))
+
+  (func $direct_debit (param $b i32) (param $work i64) (param $overflow i32)
+    (param $phase i32) (param $status i32) (param $terminal i32) (result i32)
+    (local $old i64) (local $sum i64)
+    (local.set $old (i64.load offset=24 (local.get $b)))
+    (local.set $sum (i64.add (local.get $old) (local.get $work)))
+    (i32.store offset=32 (local.get $b) (local.get $phase))
+    (i32.store offset=36 (local.get $b) (local.get $status))
+    (if (i32.or (local.get $overflow) (i64.lt_u (local.get $sum) (local.get $old)))
+      (then
+        (i64.store offset=24 (local.get $b) (i64.const -1))
+        (i32.store offset=44 (local.get $b) (i32.const 1))
+        (i32.store offset=12 (local.get $b) (i32.const 11))
+        (return (i32.const 11))))
+    (i64.store offset=24 (local.get $b) (local.get $sum))
+    (if (i32.and (i32.eqz (i32.and (i32.load offset=8 (local.get $b)) (i32.const 1)))
+      (i32.or
+        (i32.and (i64.gt_u (local.get $sum) (i64.load offset=16 (local.get $b)))
+          (i32.eqz (i32.and (local.get $terminal) (i32.ne (i32.and (i32.load offset=8 (local.get $b)) (i32.const 2)) (i32.const 0)))))
+        (i32.and (i32.eqz (local.get $terminal)) (i64.eq (local.get $sum) (i64.load offset=16 (local.get $b))))))
+      (then (i32.store offset=12 (local.get $b) (i32.const 11)) (return (i32.const 11))))
+    (local.get $status))
+
+  (func $direct_delta (param $b i32) (param $meter i32) (param $before i64)
+    (param $phase i32) (param $status i32) (param $terminal i32) (result i32)
+    (local $after i64)
+    (local.set $after (i64.load (local.get $meter)))
+    (call $direct_debit (local.get $b) (i64.sub (local.get $after) (local.get $before))
+      (i32.or (i32.load offset=8 (local.get $meter)) (i64.lt_u (local.get $after) (local.get $before)))
+      (local.get $phase) (local.get $status) (local.get $terminal)))
+
+  (func $direct_header (param $s i32) (param $kind i32)
+    (memory.fill (local.get $s) (i32.const 0) (i32.const 64))
+    (i32.store (local.get $s) (i32.const 0x4f575353))
+    (i32.store offset=4 (local.get $s) (i32.const 1))
+    (i32.store offset=8 (local.get $s) (local.get $kind))
+    (i32.store offset=24 (local.get $s) (i32.const 64)))
+
+  (func $direct_header_ok (param $s i32) (param $cap i32) (param $kind i32) (result i32)
+    (i32.and
+      (i32.and (i32.eq (i32.load (local.get $s)) (i32.const 0x4f575353))
+        (i32.eq (i32.load offset=4 (local.get $s)) (i32.const 1)))
+      (i32.and (i32.eq (i32.load offset=8 (local.get $s)) (local.get $kind))
+        (i32.and (i32.ge_u (i32.load offset=24 (local.get $s)) (i32.const 64))
+          (i32.le_u (i32.load offset=24 (local.get $s)) (local.get $cap))))))
+
+  (func $direct_end (param $s i32) (param $status i32) (result i32 i32)
+    (i32.store offset=12 (local.get $s)
+      (select (i32.const 4) (i32.const 5) (i32.or (i32.eqz (local.get $status))
+        (i32.or (i32.eq (local.get $status) (i32.const 2)) (i32.eq (local.get $status) (i32.const 3))))))
+    (i32.store offset=16 (local.get $s) (local.get $status))
+    (i32.store offset=20 (local.get $s) (i32.const 0))
+    (local.get $status) (i32.const 0))
+
+  (func $direct_need (param $s i32) (param $required i32) (result i32 i32)
+    (i32.store offset=16 (local.get $s) (i32.const 7))
+    (i32.store offset=20 (local.get $s) (local.get $required))
+    (i32.const 7) (local.get $required))
+
+  (func $compile_direct (export "compile_direct")
+    (param $schema i32) (param $bytes i32) (param $options i32)
+    (param $s i32) (param $cap i32) (param $b i32) (param $initialize i32) (param $grant_cap i32)
+    (result i32 i32)
+    (local $status i32) (local $state i32) (local $ws i32) (local $wsbytes i32) (local $program i32)
+    (local $required i32) (local $size i32) (local $grant i32) (local $before i64) (local $total i64) (local $phase i32)
+    (local.set $status (call $direct_budget_check (local.get $b)))
+    (if (local.get $status) (then (return (local.get $status) (i32.const 0))))
+    (if (i32.or (i32.gt_u (local.get $initialize) (i32.const 1))
+      (i32.or (i32.lt_s (local.get $grant_cap) (i32.const 0)) (i32.gt_u (local.get $options) (i32.const 31))))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.eqz (i32.and (call $direct_span (local.get $schema) (local.get $bytes) (i32.const 0))
+      (call $direct_span (local.get $s) (local.get $cap) (i32.const 1)))) (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.eqz (i32.and (call $direct_disjoint (local.get $schema) (local.get $bytes) (local.get $s) (local.get $cap))
+      (i32.and (call $direct_disjoint (local.get $schema) (local.get $bytes) (local.get $b) (i32.const 48))
+        (call $direct_disjoint (local.get $s) (local.get $cap) (local.get $b) (i32.const 48)))))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.lt_u (local.get $cap) (i32.const 64)) (then (return (i32.const 7) (i32.const 64))))
+    (if (local.get $initialize)
+      (then
+        (call $direct_header (local.get $s) (i32.const 1))
+        (i32.store offset=12 (local.get $s) (i32.const 1))
+        (i32.store offset=44 (local.get $s) (local.get $options))
+        (i32.store offset=48 (local.get $s) (local.get $bytes)))
+      (else
+        (if (i32.eqz (call $direct_header_ok (local.get $s) (local.get $cap) (i32.const 1))) (then (return (i32.const 12) (i32.const 0))))
+        (if (i32.or (i32.ne (i32.load offset=44 (local.get $s)) (local.get $options))
+          (i32.ne (i32.load offset=48 (local.get $s)) (local.get $bytes))) (then (return (i32.const 12) (i32.const 0))))))
+    (local.set $state (i32.load offset=12 (local.get $s)))
+    (if (i32.or (i32.eq (local.get $state) (i32.const 4)) (i32.eq (local.get $state) (i32.const 5)))
+      (then (return (i32.load offset=16 (local.get $s)) (i32.const 0))))
+    (if (i32.and (i32.ne (local.get $state) (i32.const 1)) (i32.ne (local.get $state) (i32.const 2)))
+      (then (return (i32.const 12) (i32.const 0))))
+    (local.set $ws (i32.add (local.get $s) (i32.const 64)))
+    (if (i32.eq (local.get $state) (i32.const 1))
+      (then
+        (if (call $direct_gate (local.get $b) (i32.const 2)) (then (return (call $direct_end (local.get $s) (i32.const 11)))))
+        (local.set $wsbytes (call $compile_workspace_size (local.get $bytes)))
+        (if (i32.lt_s (local.get $wsbytes) (i32.const 0)) (then (return (call $direct_end (local.get $s) (i32.const 6)))))
+        (local.set $required (i32.add (i32.const 64) (call $align8 (local.get $wsbytes))))
+        (i32.store offset=28 (local.get $s) (local.get $wsbytes))
+        (if (i32.gt_u (local.get $required) (local.get $cap)) (then (return (call $direct_need (local.get $s) (local.get $required)))))
+        (i32.store offset=24 (local.get $s) (local.get $required))
+        (local.set $initialize (i32.const 1))
+        (block $measured (loop $measure
+          (if (call $direct_gate (local.get $b) (i32.const 2)) (then (return (call $direct_end (local.get $s) (i32.const 11)))))
+          (local.set $grant (call $direct_grant (local.get $b) (local.get $grant_cap)))
+          (local.set $before (i64.const 0))
+          (if (i32.eqz (local.get $initialize)) (then (local.set $before (i64.load offset=320 (local.get $ws)))))
+          (call $measure_schema (local.get $schema) (local.get $bytes) (local.get $ws) (local.get $wsbytes)
+            (local.get $options) (local.get $initialize) (local.get $grant))
+          (drop) (local.set $status)
+          (local.set $status (call $direct_delta (local.get $b) (i32.add (local.get $ws) (i32.const 320)) (local.get $before)
+            (i32.const 2) (local.get $status) (i32.and (i32.ne (local.get $status) (i32.const 1)) (i32.ne (local.get $status) (i32.const 0)))))
+          (br_if $measured (i32.ne (local.get $status) (i32.const 1)))
+          (local.set $initialize (i32.const 0))
+          (br $measure)))
+        (if (local.get $status) (then
+          (if (i32.eq (local.get $status) (i32.const 7)) (then (local.set $status (i32.const 6))))
+          (return (call $direct_end (local.get $s) (local.get $status)))))
+        (i32.store offset=12 (local.get $s) (i32.const 2))))
+    ;; Only the measured prefix must survive a resource return/relocation.
+    (local.set $required (i32.add (i32.const 64) (call $align8 (call $compile_workspace_size (local.get $bytes)))))
+    (if (i32.lt_u (i32.load offset=24 (local.get $s)) (local.get $required)) (then (return (i32.const 12) (i32.const 0))))
+    (if (call $cw_check (local.get $ws) (i32.sub (local.get $required) (i32.const 64))) (then (return (i32.const 12) (i32.const 0))))
+    (local.set $wsbytes (call $emission_workspace_size (local.get $ws)))
+    (local.set $size (call $measured_program_size (local.get $ws)))
+    (if (i32.or (i32.lt_s (local.get $wsbytes) (i32.const 0)) (i32.lt_s (local.get $size) (i32.const 0)))
+      (then (return (call $direct_end (local.get $s) (i32.const 6)))))
+    (local.set $total (i64.add (i64.add (i64.const 64) (i64.extend_i32_u (call $align8 (local.get $wsbytes)))) (i64.extend_i32_u (local.get $size))))
+    (if (i64.gt_u (local.get $total) (i64.const 0x40000000)) (then (return (call $direct_end (local.get $s) (i32.const 6)))))
+    (local.set $required (i32.wrap_i64 (local.get $total)))
+    (i32.store offset=28 (local.get $s) (local.get $wsbytes))
+    (i32.store offset=32 (local.get $s) (i32.add (i32.const 64) (call $align8 (local.get $wsbytes))))
+    (i32.store offset=36 (local.get $s) (local.get $size))
+    (if (call $direct_gate (local.get $b) (i32.const 3)) (then (return (call $direct_end (local.get $s) (i32.const 11)))))
+    (if (i32.gt_u (local.get $required) (local.get $cap)) (then (return (call $direct_need (local.get $s) (local.get $required)))))
+    (local.set $program (i32.add (local.get $s) (i32.load offset=32 (local.get $s))))
+    (local.set $grant (call $direct_grant (local.get $b) (local.get $grant_cap)))
+    ;; init_walk runs inside emission setup, before emit_program can rebind.
+    ;; The input owner may have relocated at NEED_EMISSION.
+    (call $cw_set (local.get $ws) (global.get $CWH_SCHEMA_ADDRESS) (local.get $schema))
+    (local.set $status (call $initialize_emission (local.get $ws) (local.get $ws) (local.get $wsbytes) (local.get $program) (local.get $size)))
+    (i32.store offset=24 (local.get $s) (local.get $required))
+    (local.set $before (i64.const 0))
+    (if (i32.or (local.get $status) (i32.eqz (i32.and (i32.load offset=8 (local.get $b)) (i32.const 2))))
+      (then
+        (local.set $status (call $direct_delta (local.get $b) (i32.add (local.get $ws) (i32.const 320)) (i64.const 0)
+          (i32.const 3) (local.get $status) (i32.ne (local.get $status) (i32.const 0))))
+        (if (i32.eq (local.get $status) (i32.const 7)) (then (local.set $status (i32.const 6))))
+        (if (local.get $status) (then (return (call $direct_end (local.get $s) (local.get $status)))))
+        (local.set $before (i64.load offset=320 (local.get $ws)))
+        ;; Setup debt has already been debited; it is not a second grant debit.
+        (i64.store offset=336 (local.get $ws) (i64.const 0))
+        (local.set $grant (call $direct_grant (local.get $b) (local.get $grant_cap)))))
+    (loop $emit
+      (call $emit_program (local.get $ws) (local.get $wsbytes) (local.get $schema) (local.get $program) (local.get $grant))
+      (drop) (local.set $status)
+      (local.set $phase (select (i32.const 4) (i32.const 3) (i32.ne (i32.load offset=344 (local.get $ws)) (i32.const 0))))
+      (local.set $status (call $direct_delta (local.get $b) (i32.add (local.get $ws) (i32.const 320)) (local.get $before)
+        (local.get $phase) (local.get $status) (i32.ne (local.get $status) (i32.const 1))))
+      (if (i32.ne (local.get $status) (i32.const 1))
+        (then
+          (if (i32.eq (local.get $status) (i32.const 7)) (then (local.set $status (i32.const 6))))
+          (return (call $direct_end (local.get $s) (local.get $status)))))
+      (if (call $direct_gate (local.get $b) (local.get $phase)) (then (return (call $direct_end (local.get $s) (i32.const 11)))))
+      (local.set $before (i64.load offset=320 (local.get $ws)))
+      (local.set $grant (call $direct_grant (local.get $b) (local.get $grant_cap)))
+      (br $emit))
+    (unreachable))
+
+  (func $validate_direct (export "validate_direct")
+    (param $p i32) (param $pcap i32) (param $d i32) (param $dbytes i32)
+    (param $mode i32) (param $depth i32) (param $errors i32) (param $arena i32)
+    (param $s i32) (param $cap i32) (param $b i32) (param $initialize i32) (param $grant_cap i32)
+    (result i32 i32)
+    (local $status i32) (local $state i32) (local $cont i32) (local $size i32) (local $required i32)
+    (local $grant i32) (local $before i64) (local $next i64)
+    (local.set $status (call $direct_budget_check (local.get $b)))
+    (if (local.get $status) (then (return (local.get $status) (i32.const 0))))
+    (if (i32.or (i32.gt_u (local.get $initialize) (i32.const 1))
+      (i32.or (i32.lt_s (local.get $grant_cap) (i32.const 0)) (i32.gt_u (local.get $mode) (i32.const 3))))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.eqz (i32.and (call $direct_span (local.get $p) (local.get $pcap) (i32.const 1))
+      (i32.and (call $direct_span (local.get $d) (local.get $dbytes) (i32.const 0))
+        (call $direct_span (local.get $s) (local.get $cap) (i32.const 1)))))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.eqz (i32.and (call $direct_disjoint (local.get $p) (local.get $pcap) (local.get $d) (local.get $dbytes))
+      (i32.and (call $direct_disjoint (local.get $p) (local.get $pcap) (local.get $s) (local.get $cap))
+        (i32.and (call $direct_disjoint (local.get $p) (local.get $pcap) (local.get $b) (i32.const 48))
+          (i32.and (call $direct_disjoint (local.get $d) (local.get $dbytes) (local.get $s) (local.get $cap))
+            (i32.and (call $direct_disjoint (local.get $d) (local.get $dbytes) (local.get $b) (i32.const 48))
+              (call $direct_disjoint (local.get $s) (local.get $cap) (local.get $b) (i32.const 48))))))))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.lt_u (local.get $pcap) (i32.const 80)) (then (return (i32.const 8) (i32.const 0))))
+    (if (i32.lt_u (local.get $cap) (i32.const 64)) (then (return (i32.const 7) (i32.const 64))))
+    (if (local.get $initialize)
+      (then
+        (call $direct_header (local.get $s) (i32.const 2))
+        (i32.store offset=12 (local.get $s) (i32.const 3))
+        (i32.store offset=40 (local.get $s) (local.get $arena))
+        (i32.store offset=44 (local.get $s) (local.get $mode))
+        (i32.store offset=48 (local.get $s) (local.get $depth))
+        (i32.store offset=52 (local.get $s) (local.get $errors))
+        (i32.store offset=56 (local.get $s) (local.get $pcap))
+        (i32.store offset=60 (local.get $s) (local.get $dbytes))
+        (if (call $direct_gate (local.get $b) (i32.const 8)) (then (return (call $direct_end (local.get $s) (i32.const 11)))))
+        ;; TRUSTED is honored only for the facade compatibility boundary.
+        ;; It asserts a byte-identical live program already checked at compile/load.
+        ;; Strict callers cannot bypass the bound checker with a forged header.
+        (if (i32.eqz (i32.and (i32.ne (i32.and (local.get $mode) (i32.const 2)) (i32.const 0))
+          (i32.ne (i32.and (i32.load offset=8 (local.get $b)) (i32.const 2)) (i32.const 0))))
+          (then
+            (call $work_begin (i32.const 0) (i32.const 1))
+            (local.set $status (call $validate_program (local.get $p) (local.get $pcap)))
+            (global.set $work_active (i32.const 0))
+            (local.set $status (call $direct_debit (local.get $b) (global.get $work_total) (global.get $work_overflow)
+              (i32.const 8) (local.get $status) (i32.ne (local.get $status) (i32.const 0))))
+            (if (local.get $status) (then (return (call $direct_end (local.get $s) (local.get $status))))))))
+      (else
+        (if (i32.eqz (call $direct_header_ok (local.get $s) (local.get $cap) (i32.const 2))) (then (return (i32.const 12) (i32.const 0))))
+        (if (i32.or (i32.ne (i32.load offset=44 (local.get $s)) (local.get $mode))
+          (i32.or (i32.ne (i32.load offset=48 (local.get $s)) (local.get $depth))
+            (i32.or (i32.ne (i32.load offset=52 (local.get $s)) (local.get $errors))
+              (i32.or (i32.ne (i32.load offset=56 (local.get $s)) (local.get $pcap))
+                (i32.ne (i32.load offset=60 (local.get $s)) (local.get $dbytes))))))
+          (then (return (i32.const 12) (i32.const 0))))))
+    (local.set $state (i32.load offset=12 (local.get $s)))
+    (if (i32.or (i32.eq (local.get $state) (i32.const 4)) (i32.eq (local.get $state) (i32.const 5)))
+      (then (return (i32.load offset=16 (local.get $s)) (i32.const 0))))
+    (if (i32.ne (local.get $state) (i32.const 3)) (then (return (i32.const 12) (i32.const 0))))
+    (local.set $cont (i32.add (local.get $s) (i32.const 64)))
+    (loop $attempt
+      (local.set $arena (i32.load offset=40 (local.get $s)))
+      (if (call $direct_gate (local.get $b) (i32.const 5)) (then (return (call $direct_end (local.get $s) (i32.const 11)))))
+      (local.set $size (call $continuation_size (local.get $p) (local.get $pcap) (local.get $depth) (local.get $errors) (local.get $arena)))
+      (if (i32.or (i32.lt_s (local.get $size) (i32.const 0)) (i32.gt_u (local.get $size) (i32.const 0x3fffffc0)))
+        (then (return (call $direct_end (local.get $s) (i32.const 6)))))
+      (local.set $required (i32.add (i32.const 64) (local.get $size)))
+      (i32.store offset=28 (local.get $s) (local.get $size))
+      (i32.store offset=32 (local.get $s) (i32.const 64))
+      (i32.store offset=36 (local.get $s) (local.get $size))
+      (if (i32.gt_u (local.get $required) (local.get $cap)) (then (return (call $direct_need (local.get $s) (local.get $required)))))
+      (local.set $grant (call $direct_grant (local.get $b) (local.get $grant_cap)))
+      (local.set $status (call $initialize_validation (local.get $p) (local.get $pcap) (local.get $d) (local.get $dbytes)
+        (i32.or (local.get $mode) (i32.const 2)) (local.get $depth) (local.get $errors) (local.get $arena) (local.get $cont) (local.get $size)))
+      (i32.store offset=24 (local.get $s) (local.get $required))
+      (local.set $before (i64.const 0))
+      (if (i32.or (local.get $status) (i32.eqz (i32.and (i32.load offset=8 (local.get $b)) (i32.const 2))))
+        (then
+          (local.set $status (call $direct_delta (local.get $b) (i32.add (local.get $cont) (i32.const 144)) (i64.const 0)
+            (i32.const 5) (local.get $status) (i32.ne (local.get $status) (i32.const 0))))
+          (if (i32.eq (local.get $status) (i32.const 7)) (then (local.set $status (i32.const 6))))
+          (if (local.get $status) (then (return (call $direct_end (local.get $s) (local.get $status)))))
+          (local.set $before (i64.load offset=144 (local.get $cont)))
+          (i64.store offset=160 (local.get $cont) (i64.const 0))
+          (local.set $grant (call $direct_grant (local.get $b) (local.get $grant_cap)))))
+      (block $finished (loop $run
+        (call $run_validation (local.get $cont) (local.get $size) (local.get $grant))
+        (drop) (local.set $status)
+        (i32.store offset=40 (local.get $b) (select (i32.load offset=124 (local.get $cont)) (i32.const -1)
+          (i32.lt_u (i32.load offset=124 (local.get $cont)) (i32.load offset=132 (local.get $cont)))))
+        ;; An arena failure is unfinished even though the stepped attempt ended.
+        (local.set $status (call $direct_delta (local.get $b) (i32.add (local.get $cont) (i32.const 144)) (local.get $before)
+          (i32.const 6) (local.get $status)
+          (i32.and (i32.ne (local.get $status) (i32.const 1))
+            (i32.eqz (i32.and (i32.eq (local.get $status) (i32.const 6))
+              (i32.gt_u (i32.load offset=104 (local.get $cont)) (i32.load offset=60 (local.get $cont))))))))
+        (br_if $finished (i32.ne (local.get $status) (i32.const 1)))
+        (if (call $direct_gate (local.get $b) (i32.const 6)) (then (return (call $direct_end (local.get $s) (i32.const 11)))))
+        (local.set $before (i64.load offset=144 (local.get $cont)))
+        (local.set $grant (call $direct_grant (local.get $b) (local.get $grant_cap)))
+        (br $run)))
+      (if (i32.and (i32.eq (local.get $status) (i32.const 6))
+        (i32.gt_u (i32.load offset=104 (local.get $cont)) (i32.load offset=60 (local.get $cont))))
+        (then
+          (local.set $next (i64.shl (i64.extend_i32_u (i32.load offset=60 (local.get $cont))) (i64.const 1)))
+          (if (i64.lt_u (local.get $next) (i64.extend_i32_u (i32.load offset=104 (local.get $cont))))
+            (then (local.set $next (i64.extend_i32_u (i32.load offset=104 (local.get $cont))))))
+          (if (i64.gt_u (local.get $next) (i64.const 0x10000000)) (then (return (call $direct_end (local.get $s) (i32.const 6)))))
+          (i32.store offset=40 (local.get $s) (i32.wrap_i64 (local.get $next)))
+          (i32.store offset=24 (local.get $s) (i32.const 64))
+          (br $attempt)))
+      (return (call $direct_end (local.get $s) (local.get $status))))
+    (unreachable))
+
+  ;; Output-only resource re-entry: no evaluation or template copy in the caller.
+  ;; On success the second result is written bytes; on shortage it is the next
+  ;; bounded output capacity (not an exact required length). The settled helper
+  ;; scratch and all its immutable inputs remain live across every attempt.
+  (func $render_error_direct (export "render_error_direct")
+    (param $p i32) (param $pcap i32) (param $s i32) (param $scap i32)
+    (param $index i32) (param $out i32) (param $cap i32) (param $b i32) (result i32 i32)
+    (local $status i32) (local $cont i32) (local $d i32) (local $dn i32) (local $n i32) (local $next i64)
+    (local.set $status (call $direct_budget_check (local.get $b)))
+    (if (local.get $status) (then (return (local.get $status) (i32.const 0))))
+    (if (i32.eqz (i32.and (call $direct_span (local.get $p) (local.get $pcap) (i32.const 1))
+      (i32.and (call $direct_span (local.get $s) (local.get $scap) (i32.const 1))
+        (call $direct_span (local.get $out) (local.get $cap) (i32.const 0))))) (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.or (i32.lt_u (local.get $pcap) (i32.const 80)) (i32.lt_u (local.get $scap) (i32.const 232)))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.eqz (call $direct_header_ok (local.get $s) (local.get $scap) (i32.const 2))) (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.or (i32.ne (i32.load offset=12 (local.get $s)) (i32.const 4))
+      (i32.or (i32.ne (i32.load offset=32 (local.get $s)) (i32.const 64))
+        (i32.ne (i32.load offset=56 (local.get $s)) (local.get $pcap)))) (then (return (i32.const 12) (i32.const 0))))
+    (local.set $cont (i32.add (local.get $s) (i32.const 64)))
+    (if (i32.or (i32.ne (i32.load (local.get $cont)) (global.get $CONT_MAGIC))
+      (i32.ne (i32.load offset=28 (local.get $cont)) (global.get $PHASE_COMPLETE))) (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.or (i32.ne (i32.load offset=4 (local.get $cont)) (global.get $CONT_VERSION))
+      (i32.ne (i32.load offset=8 (local.get $cont)) (local.get $p))) (then (return (i32.const 12) (i32.const 0))))
+    (local.set $d (i32.load offset=16 (local.get $cont)))
+    (local.set $dn (i32.load offset=20 (local.get $cont)))
+    (if (i32.eqz (call $direct_span (local.get $d) (local.get $dn) (i32.const 0))) (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.eqz (i32.and (call $direct_disjoint (local.get $p) (local.get $pcap) (local.get $s) (local.get $scap))
+      (i32.and (call $direct_disjoint (local.get $p) (local.get $pcap) (local.get $b) (i32.const 48))
+        (i32.and (call $direct_disjoint (local.get $p) (local.get $pcap) (local.get $out) (local.get $cap))
+          (i32.and (call $direct_disjoint (local.get $s) (local.get $scap) (local.get $b) (i32.const 48))
+            (i32.and (call $direct_disjoint (local.get $s) (local.get $scap) (local.get $out) (local.get $cap))
+              (call $direct_disjoint (local.get $b) (i32.const 48) (local.get $out) (local.get $cap))))))))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.eqz (i32.and (call $direct_disjoint (local.get $d) (local.get $dn) (local.get $p) (local.get $pcap))
+      (i32.and (call $direct_disjoint (local.get $d) (local.get $dn) (local.get $s) (local.get $scap))
+        (i32.and (call $direct_disjoint (local.get $d) (local.get $dn) (local.get $out) (local.get $cap))
+          (call $direct_disjoint (local.get $d) (local.get $dn) (local.get $b) (i32.const 48))))))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (call $direct_gate (local.get $b) (i32.const 7)) (then (return (i32.const 11) (i32.const 0))))
+    (call $work_begin (i32.const 0) (i32.const 1))
+    (local.set $n (call $render_error_complete_bound (local.get $p) (local.get $cont) (local.get $index) (local.get $out) (local.get $cap)))
+    (global.set $work_active (i32.const 0))
+    (local.set $status (select (i32.const 0) (select (i32.const 7) (i32.const 12) (i32.eq (local.get $n) (i32.const -1)))
+      (i32.ge_s (local.get $n) (i32.const 0))))
+    (local.set $status (call $direct_debit (local.get $b) (global.get $work_total) (global.get $work_overflow)
+      (i32.const 7) (local.get $status) (i32.ne (local.get $status) (i32.const 7))))
+    (if (i32.eqz (local.get $status)) (then (return (i32.const 0) (local.get $n))))
+    (if (i32.ne (local.get $status) (i32.const 7)) (then (return (local.get $status) (i32.const 0))))
+    (local.set $next (i64.shl (i64.extend_i32_u (local.get $cap)) (i64.const 1)))
+    (if (i64.lt_u (local.get $next) (i64.const 8192)) (then (local.set $next (i64.const 8192))))
+    (if (i64.gt_u (local.get $next) (i64.const 0x40000000)) (then (return (i32.const 6) (i32.const 0))))
+    (i32.const 7) (i32.wrap_i64 (local.get $next)))
+
+  ;; Engine failure data belongs upstream just like validation diagnostics.
+  ;; Entries mirror status/diagnostic codes, then record keys and message prefixes.
+  (data $failure_names
+    "OK\00PAUSED\00VALID\00INVALID\00SYNTAX_ERROR\00UNSUPPORTED\00LIMIT_EXCEEDED\00"
+    "BUFFER_TOO_SMALL\00CORRUPT_PROGRAM\00CORRUPT_DOCUMENT\00INVALID_UTF8\00"
+    "WORK_LIMIT_EXCEEDED\00INVALID_ARGUMENT\00"
+    "NONE\00SCHEMA_NOT_OBJECT\00KEYWORD_SHAPE\00REF_UNRESOLVABLE\00REF_NOT_LOCAL\00"
+    "DEPTH\00POINTER_LENGTH\00NODE_COUNT\00TABLE_SIZE\00UNKNOWN_KEYWORD\00REGEX\00UNKNOWN_FORMAT\00BIGNUM\00"
+    "message\00status\00diagnostic\00keyword\00schemaOffset\00detail\00"
+    "schema compile failed: \00validation failed: \00")
+
+  (func $failure_string (param $out i32) (param $cap i32) (param $cur i32)
+    (param $tables i32) (param $index i32) (result i32) (local $p i32)
+    (local.set $p (call $table_entry (i32.add (local.get $tables) (i32.const 676))
+      (local.get $index) (i32.add (local.get $tables) (i32.const 1532))))
+    (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur)
+      (local.get $p) (i32.load offset=1532 (local.get $tables))))
+
+  (func $render_failure_bound (param $s i32) (param $out i32) (param $cap i32) (result i32)
+    (local $tables i32) (local $cur i32) (local $status i32) (local $compile i32)
+    (local $diagnostic i32) (local $code i32) (local $keyword i32) (local $p i32)
+    (local $message i32) (local $length i32) (local $n i32)
+    (call $work_add (i32.const 1))
+    (if (i32.lt_u (local.get $cap) (i32.const 2048)) (then (return (i32.const -1))))
+    (local.set $cap (i32.sub (local.get $cap) (i32.const 1536)))
+    (local.set $tables (i32.add (local.get $out) (local.get $cap)))
+    (call $work_add (call $bulk_charge (i32.const 1093)))
+    (memory.init $keywords (local.get $tables) (i32.const 0) (i32.const 676))
+    (memory.init $failure_names (i32.add (local.get $tables) (i32.const 676)) (i32.const 0) (i32.const 417))
+    (local.set $status (i32.load offset=16 (local.get $s)))
+    (local.set $compile (i32.eq (i32.load offset=8 (local.get $s)) (i32.const 1)))
+    (local.set $diagnostic (i32.and (local.get $compile) (i32.ge_u (i32.load offset=24 (local.get $s)) (i32.const 424))))
+    (local.set $cur (call $mpw_map (local.get $out) (local.get $cap) (i32.const 0)
+      (select (i32.const 6) (i32.const 2) (local.get $diagnostic))))
+    (local.set $cur (call $failure_string (local.get $out) (local.get $cap) (local.get $cur) (local.get $tables) (i32.const 26)))
+    ;; Stage the small engine-owned prefix and status without allocating.
+    (local.set $message (i32.add (local.get $tables) (i32.const 1200)))
+    (local.set $p (call $table_entry (i32.add (local.get $tables) (i32.const 676))
+      (select (i32.const 32) (i32.const 33) (local.get $compile)) (i32.add (local.get $tables) (i32.const 1532))))
+    (local.set $length (i32.load offset=1532 (local.get $tables)))
+    (drop (call $mpw_raw (local.get $message) (i32.const 128) (i32.const 0) (local.get $p) (local.get $length)))
+    (local.set $p (call $table_entry (i32.add (local.get $tables) (i32.const 676))
+      (local.get $status) (i32.add (local.get $tables) (i32.const 1532))))
+    (local.set $n (i32.load offset=1532 (local.get $tables)))
+    (drop (call $mpw_raw (local.get $message) (i32.const 128) (local.get $length) (local.get $p) (local.get $n)))
+    (local.set $cur (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur)
+      (local.get $message) (i32.add (local.get $length) (local.get $n))))
+    (local.set $cur (call $failure_string (local.get $out) (local.get $cap) (local.get $cur) (local.get $tables) (i32.const 27)))
+    (local.set $cur (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur) (local.get $p) (local.get $n)))
+    (if (local.get $diagnostic) (then
+      (local.set $code (i32.load offset=132 (local.get $s)))
+      (local.set $keyword (i32.load offset=136 (local.get $s)))
+      (local.set $cur (call $failure_string (local.get $out) (local.get $cap) (local.get $cur) (local.get $tables) (i32.const 28)))
+      (if (i32.le_u (local.get $code) (i32.const 12))
+        (then (local.set $cur (call $failure_string (local.get $out) (local.get $cap) (local.get $cur)
+          (local.get $tables) (i32.add (i32.const 13) (local.get $code)))))
+        (else (local.set $cur (call $mpw_uint (local.get $out) (local.get $cap) (local.get $cur) (local.get $code)))))
+      (local.set $cur (call $failure_string (local.get $out) (local.get $cap) (local.get $cur) (local.get $tables) (i32.const 29)))
+      (if (i32.and (i32.gt_u (local.get $keyword) (i32.const 0)) (i32.le_u (local.get $keyword) (i32.const 64)))
+        (then
+          (local.set $p (call $table_entry (local.get $tables) (i32.sub (local.get $keyword) (i32.const 1))
+            (i32.add (local.get $tables) (i32.const 1532))))
+          (local.set $cur (call $mpw_str (local.get $out) (local.get $cap) (local.get $cur)
+            (local.get $p) (i32.load offset=1532 (local.get $tables)))))
+        (else (local.set $cur (call $mpw_byte (local.get $out) (local.get $cap) (local.get $cur) (i32.const 0xc0)))))
+      (local.set $cur (call $failure_string (local.get $out) (local.get $cap) (local.get $cur) (local.get $tables) (i32.const 30)))
+      (local.set $cur (call $mpw_uint (local.get $out) (local.get $cap) (local.get $cur) (i32.load offset=140 (local.get $s))))
+      (local.set $cur (call $failure_string (local.get $out) (local.get $cap) (local.get $cur) (local.get $tables) (i32.const 31)))
+      (local.set $cur (call $mpw_uint (local.get $out) (local.get $cap) (local.get $cur) (i32.load offset=204 (local.get $s))))))
+    (local.get $cur))
+
+  ;; A failed helper no longer needs its inputs; only this immutable scratch
+  ;; and the aggregate budget remain live. Output is a third disjoint owner.
+  (func $render_failure_direct (export "render_failure_direct")
+    (param $s i32) (param $scap i32) (param $out i32) (param $cap i32) (param $b i32) (result i32 i32)
+    (local $status i32) (local $kind i32) (local $n i32) (local $next i64)
+    (local.set $status (call $direct_budget_check (local.get $b)))
+    (if (local.get $status) (then (return (local.get $status) (i32.const 0))))
+    (if (i32.or (i32.lt_u (local.get $scap) (i32.const 64))
+      (i32.eqz (i32.and (call $direct_span (local.get $s) (local.get $scap) (i32.const 1))
+        (call $direct_span (local.get $out) (local.get $cap) (i32.const 0)))))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.eqz (i32.and (call $direct_disjoint (local.get $s) (local.get $scap) (local.get $b) (i32.const 48))
+      (i32.and (call $direct_disjoint (local.get $out) (local.get $cap) (local.get $b) (i32.const 48))
+        (call $direct_disjoint (local.get $out) (local.get $cap) (local.get $s) (local.get $scap)))))
+      (then (return (i32.const 12) (i32.const 0))))
+    (local.set $kind (i32.load offset=8 (local.get $s)))
+    (if (i32.or (i32.lt_u (local.get $kind) (i32.const 1)) (i32.gt_u (local.get $kind) (i32.const 2)))
+      (then (return (i32.const 12) (i32.const 0))))
+    (if (i32.or (i32.eqz (call $direct_header_ok (local.get $s) (local.get $scap) (local.get $kind)))
+      (i32.ne (i32.load offset=12 (local.get $s)) (i32.const 5))) (then (return (i32.const 12) (i32.const 0))))
+    (local.set $status (i32.load offset=16 (local.get $s)))
+    (if (i32.or (i32.or (i32.lt_u (local.get $status) (i32.const 4)) (i32.gt_u (local.get $status) (i32.const 12)))
+      (i32.or (i32.eq (local.get $status) (i32.const 7)) (i32.eq (local.get $status) (i32.const 11))))
+      (then (return (i32.const 12) (i32.const 0))))
+    ;; Facade formatting preserves its already-settled terminal error even
+    ;; after atomic overrun. Strict consumers must still have positive work.
+    (if (i32.eqz (i32.and (i32.load offset=8 (local.get $b)) (i32.const 2)))
+      (then (if (call $direct_gate (local.get $b) (i32.const 7)) (then (return (i32.const 11) (i32.const 0))))))
+    (call $work_begin (i32.const 0) (i32.const 1))
+    (local.set $n (call $render_failure_bound (local.get $s) (local.get $out) (local.get $cap)))
+    (global.set $work_active (i32.const 0))
+    (local.set $status (select (i32.const 0) (i32.const 7) (i32.ge_s (local.get $n) (i32.const 0))))
+    (local.set $status (call $direct_debit (local.get $b) (global.get $work_total) (global.get $work_overflow)
+      (i32.const 7) (local.get $status) (i32.eqz (local.get $status))))
+    (if (i32.eqz (local.get $status)) (then (return (i32.const 0) (local.get $n))))
+    (if (i32.ne (local.get $status) (i32.const 7)) (then (return (local.get $status) (i32.const 0))))
+    (local.set $next (i64.shl (i64.extend_i32_u (local.get $cap)) (i64.const 1)))
+    (if (i64.lt_u (local.get $next) (i64.const 2048)) (then (local.set $next (i64.const 2048))))
+    (if (i64.gt_u (local.get $next) (i64.const 0x40000000)) (then (return (i32.const 6) (i32.const 0))))
+    (i32.const 7) (i32.wrap_i64 (local.get $next)))
+
+)
