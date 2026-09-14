@@ -75,11 +75,11 @@ must be migrated or rejected; the runtime does not guess its layout.
 Use Node 22 or later or Bun 1.3 or later:
 
 ```sh
-npm install sandscript
+npm install @fernandoviac/sandscript
 ```
 
 ```sh
-bun add sandscript
+bun add @fernandoviac/sandscript
 ```
 
 The runtime uses shared WebAssembly memory and `SharedArrayBuffer`. Browser
@@ -91,10 +91,11 @@ the same plain runtime modules for Node and Bun.
 
 ## Host runtime
 
-The package root and `sandscript/runtime` export the maintained runtime driver:
+The package root and `@fernandoviac/sandscript/runtime` export the maintained
+runtime driver:
 
 ```javascript
-import { Runtime } from "sandscript";
+import { Runtime } from "@fernandoviac/sandscript";
 ```
 
 `Runtime` composes a prepared interpreter session, inbound and outbound
@@ -113,7 +114,7 @@ SandScript's JSON Schema implementation is also available to host applications
 without loading the interpreter:
 
 ```javascript
-import { createSchemaEngine } from "sandscript/schema";
+import { createSchemaEngine } from "@fernandoviac/sandscript/schema";
 
 const engine = createSchemaEngine();
 const schema = engine.compile({
@@ -146,9 +147,9 @@ and IDN hostname or email checks that require unavailable IDNA tables.
 
 ## Package entries
 
-- `sandscript` — the maintained host runtime;
-- `sandscript/runtime` — the same runtime entry explicitly; and
-- `sandscript/schema` — the standalone JSON Schema engine.
+- `@fernandoviac/sandscript` — the maintained host runtime;
+- `@fernandoviac/sandscript/runtime` — the same runtime entry explicitly; and
+- `@fernandoviac/sandscript/schema` — the standalone JSON Schema engine.
 
 Fuel internals, membrane internals, generated WebAssembly modules, the local
 `sand` command, and test helpers are not separate public package entries.

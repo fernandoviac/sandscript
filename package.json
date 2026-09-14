@@ -1,5 +1,5 @@
 {
-  "name": "sandscript",
+  "name": "@fernandoviac/sandscript",
   "version": "0.1.0",
   "description": "JavaScript with explicit capability grants and a bounded, inspectable, snapshot-capable runtime.",
   "type": "module",
